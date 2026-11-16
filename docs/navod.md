@@ -7,6 +7,21 @@
 > - `<IP_SERVERU>` nahraďte IP adresou své VM. V referenčním labu je to `192.0.2.10`.
 > - Hodnoty ve tvaru `<NĚCO>` jsou placeholdery. Skutečná tajemství do návodu ani do gitu nikdy nepatří.
 
+**Obsah:**
+1. [Úvod](#1-úvod)
+2. [Prerekvizity](#2-prerekvizity)
+3. [Krok 0: Průzkum výchozího stavu](#3-krok-0-průzkum-výchozího-stavu)
+4. [Krok 1: Příprava systému](#4-krok-1-příprava-systému)
+5. [Krok 2: Docker Engine a Docker Compose](#5-krok-2-docker-engine-a-docker-compose)
+6. [Krok 3: LiteLLM Proxy a PostgreSQL](#6-krok-3-litellm-proxy-a-postgresql)
+7. [Krok 4: Open WebUI](#7-krok-4-open-webui)
+8. [Krok 5: Provoz](#8-krok-5-provoz)
+9. [Bezpečnostní poznámky](#9-bezpečnostní-poznámky)
+10. [Další kroky](#10-další-kroky)
+11. [Odkazy](#11-odkazy)
+
+Hotové konfigurační soubory jsou v repozitáři v adresáři [`deploy/`](../deploy/). Všechny příkazy použité při přípravě referenčního labu jsou v [`command-log.md`](command-log.md).
+
 ---
 
 ## 1. Úvod
@@ -671,7 +686,7 @@ services:
 
 | Prvek | Proč |
 |---|---|
-| **Pinované verze image** | `latest` se mění pod rukama. Po restartu by mohla naběhnout jiná verze s jinou DB migrací. S pinovanou verzí víte, co běží, a update je vědomý krok (kap. 9). Použitá verze byla v době psaní stará alespoň 2 týdny, takže měla čas na odhalení případných chyb. |
+| **Pinované verze image** | `latest` se mění pod rukama. Po restartu by mohla naběhnout jiná verze s jinou DB migrací. S pinovanou verzí víte, co běží, a update je vědomý krok (kap. 8.3). Použitá verze byla v době psaní stará alespoň 2 týdny, takže měla čas na odhalení případných chyb. |
 | **`restart: unless-stopped`** | Kontejner se po pádu nebo restartu serveru sám spustí, pokud ho ručně nezastavíte. |
 | **`healthcheck`** | Docker pravidelně ověřuje, že služba opravdu odpovídá, nejen že běží proces. Stav vidíte v `docker compose ps` (`healthy`). |
 | **`depends_on: condition: service_healthy`** | LiteLLM startuje až ve chvíli, kdy Postgres přijímá spojení. Jinak by při prvním startu spadl na chybě připojení k DB. |
@@ -861,7 +876,7 @@ chmod 600 .env
 unset resp
 ```
 ```
-{"key_alias":"open-webui","models":["nemotron-3-ultra"],"key_prefix":"sk-UK"}
+{"key_alias":"open-webui","models":["nemotron-3-ultra"],"key_prefix":"sk-Ab"}
 ```
 
 - `"models": ["nemotron-3-ultra"]` omezí klíč jen na tento model. Model přidaný později do `config.yaml` tento klíč automaticky neuvidí.
@@ -1036,4 +1051,319 @@ V Admin UI LiteLLM (`http://<IP_SERVERU>:4000/ui` → **Logs**) je request vidě
 
 ---
 
-*Další kapitoly (provoz, bezpečnost, další kroky) se doplňují průběžně.*
+## 8. Krok 5: Provoz
+
+Všechny příkazy se spouštějí v adresáři `/opt/ai-stack`:
+```bash
+cd /opt/ai-stack
+```
+
+### 8.1 Stav a logy
+
+| Úkol | Příkaz |
+|---|---|
+| Stav služeb a healthchecků | `docker compose ps` |
+| Logy jedné služby, živě | `docker compose logs -f litellm` (nebo `open-webui`, `postgres`) |
+| Posledních N řádků / za poslední dobu | `docker compose logs --tail 100 litellm`, `docker compose logs --since 30m litellm` |
+| Jen chyby | `docker compose logs --since 1h litellm \| grep -iE "error\|exception"` |
+| Spotřeba CPU a RAM | `docker stats --no-stream` |
+| Obsazení disku Dockerem | `docker system df` |
+| Výsledek posledních healthchecků | `docker inspect --format '{{json .State.Health}}' ai-stack-litellm-1 \| jq` |
+
+Logy kontejnerů rotuje Docker podle `x-logging` v compose (3 × 10 MB na kontejner). Jsou v `/var/lib/docker/containers/<id>/*-json.log`. Pro dlouhodobé uchování je posílejte do centrálního logování (viz kap. 10).
+
+### 8.2 Restart a změny konfigurace
+
+| Situace | Příkaz | Poznámka |
+|---|---|---|
+| Restart jedné služby | `docker compose restart litellm` | Proces se restartuje se **stejnou** konfigurací kontejneru. |
+| Změna `config.yaml` | `docker compose restart litellm` | Soubor je připojený jako volume, LiteLLM ho načte při startu. |
+| Změna `docker-compose.yml` nebo `.env` | `docker compose up -d` | Compose znovu vytvoří jen změněné kontejnery. `restart` by změny **nenačetl**. |
+| Zastavení celého stacku | `docker compose stop` / `docker compose start` | Kontejnery zůstanou, jen se zastaví. |
+| Odstranění kontejnerů a sítě | `docker compose down` | **Volumes (data) zůstanou.** Další `up -d` vše vytvoří znovu. |
+| ⚠️ Smazání včetně dat | `docker compose down -v` | Smaže volumes `pgdata` a `open-webui-data`. **Nevratné!** |
+| Po restartu serveru | nic | `restart: unless-stopped` + `systemctl is-enabled docker` = stack naběhne sám. |
+
+### 8.3 Update na novou verzi
+
+**Postup:** záloha → přečíst release notes → změnit tag → `pull` → `up -d` → ověřit.
+
+```bash
+cd /opt/ai-stack
+
+# 1) záloha (kap. 8.4) – před každým updatem!
+
+# 2) release notes
+#    LiteLLM:    https://github.com/BerriAI/litellm/releases
+#    Open WebUI: https://github.com/open-webui/open-webui/releases
+#    Hledejte: breaking changes, DB migrace, změny proměnných prostředí.
+
+# 3) změna verze image (příklad LiteLLM)
+sed -i 's|ghcr.io/berriai/litellm:v1.106.6|ghcr.io/berriai/litellm:<NOVÁ_VERZE>|' docker-compose.yml
+grep "image:" docker-compose.yml
+
+# 4) stažení a nasazení
+docker compose pull litellm
+docker compose up -d litellm
+
+# 5) ověření
+docker compose ps
+docker compose logs --tail 50 litellm
+curl -s http://localhost:4000/health/readiness | jq '{status, db}'
+```
+
+**Očekávaný výstup kroku 4:**
+```
+ Container ai-stack-litellm-1 Recreate
+ Container ai-stack-litellm-1 Recreated
+ ...
+ Container ai-stack-litellm-1 Started
+```
+
+| Komponenta | Na co si dát pozor |
+|---|---|
+| **LiteLLM** | Při startu automaticky migruje schéma DB. **Návrat na starší verzi po migraci nemusí fungovat.** Proto vždy nejdřív záloha DB. Volte release starý aspoň 1–2 týdny. |
+| **Open WebUI** | Také migruje svou DB (`webui.db`). Downgrade oficiálně podporovaný není, tedy záloha volume. Viz [Updating Open WebUI](https://docs.openwebui.com/getting-started/updating). |
+| **PostgreSQL** | **Minor** verze (`16.15` → `16.16`) stačí změnit tag a `up -d`, formát dat je kompatibilní. **Major** verze (`16` → `17`) **nelze** jen přepnout. Je potřeba `pg_dump` → nový prázdný volume → `pg_restore`, případně `pg_upgrade`. |
+| **Docker Engine** | Aktualizuje se přes `apt` spolu se systémem (`sudo apt-get upgrade`). Při upgradu se restartuje démon a s ním i kontejnery. |
+
+Úklid starých image po úspěšném updatu (smaže jen image nepoužívané žádným kontejnerem):
+```bash
+docker image prune
+```
+
+### 8.4 Záloha
+
+**Co zálohovat:**
+
+| Co | Proč | Jak |
+|---|---|---|
+| `.env` | tajemství, **včetně `LITELLM_SALT_KEY`**, bez kterého nejdou dešifrovat credentials v DB | kopie souboru |
+| `docker-compose.yml`, `config.yaml` | konfigurace (je i v gitu, ale záloha ukládá přesně tu verzi, která běžela) | kopie souborů |
+| Postgres (LiteLLM) | virtual keys, uživatelé, týmy, budgety, spend logy | `pg_dump` za běhu, konzistentní |
+| volume `open-webui-data` | uživatelé, chaty, nastavení, nahrané soubory, vektorová DB | `tar` volume, krátce zastavit kvůli SQLite |
+
+```bash
+cd /opt/ai-stack
+sudo install -d -o "$USER" -g "$USER" -m 700 /opt/ai-stack-backups
+TS=$(date +%Y%m%d-%H%M%S); B=/opt/ai-stack-backups/$TS
+umask 077; mkdir -p "$B"
+
+# 1) konfigurace a tajemství
+cp -p .env docker-compose.yml config.yaml "$B/"
+
+# 2) PostgreSQL – online dump ve formátu custom (-Fc, komprimovaný, pro pg_restore)
+docker compose exec -T postgres pg_dump -U litellm -d litellm -Fc > "$B/litellm-db.dump"
+
+# 3) Open WebUI – krátké zastavení kvůli konzistenci SQLite, bez cache modelů
+docker compose stop open-webui
+docker run --rm \
+  -v ai-stack_open-webui-data:/data:ro \
+  -v "$B":/backup \
+  alpine:3.24.3 sh -c "umask 077; tar czf /backup/open-webui-data.tar.gz -C /data --exclude=./cache . \
+                       && chown $(id -u):$(id -g) /backup/open-webui-data.tar.gz"
+docker compose start open-webui
+
+chmod 600 "$B"/*
+ls -la "$B"
+```
+**Očekávaný výstup:**
+```
+drwx------ 2 labadmin labadmin   4096 Nov 16 14:18 .
+-rw------- 1 labadmin labadmin   1356 Nov 16 13:25 config.yaml
+-rw------- 1 labadmin labadmin   3882 Nov 16 14:02 docker-compose.yml
+-rw------- 1 labadmin labadmin    858 Nov 16 14:02 .env
+-rw------- 1 labadmin labadmin 274620 Nov 16 14:16 litellm-db.dump
+-rw------- 1 labadmin labadmin  40503 Nov 16 14:18 open-webui-data.tar.gz
+```
+
+Vysvětlení:
+- **`docker run … alpine tar`**: k obsahu volume se nejbezpečněji dostanete dočasným kontejnerem, který volume připojí (`:ro` = jen pro čtení). Nespoléhejte na interní cestu `/var/lib/docker/volumes/…`.
+- **`--exclude=./cache`**: cache obsahuje stažené embedding modely (~1 GB), které si Open WebUI při startu stáhne znovu. Bez ní má záloha řádově desítky kB místo 1 GB.
+- **`chown` a `umask 077`**: kontejner běží jako root, takže bez toho by archiv patřil rootovi a byl čitelný pro všechny. Záloha přitom obsahuje hashe hesel uživatelů a uložený virtual key.
+- **Výpadek** Open WebUI trvá jen pár sekund (zastavení → tar → start, healthy zhruba za 30 s). LiteLLM API běží celou dobu.
+
+**Ověření zálohy:**
+```bash
+docker compose exec -T postgres pg_restore --list < "$B/litellm-db.dump" | grep -c "TABLE DATA"   # počet tabulek s daty, např. 98
+tar tzf "$B/open-webui-data.tar.gz" | head      # ./webui.db, ./vector_db/..., ./uploads/
+```
+
+**Zkušební obnova DB** do dočasného kontejneru, bez dopadu na produkci:
+```bash
+docker run -d --name pg-restore-test -e POSTGRES_USER=litellm -e POSTGRES_PASSWORD=test -e POSTGRES_DB=litellm postgres:16.15
+sleep 10
+docker exec -i pg-restore-test pg_restore -U litellm -d litellm --no-owner < "$B/litellm-db.dump" && echo RESTORE_OK
+docker exec pg-restore-test psql -U litellm -d litellm -tAc 'select key_alias from "LiteLLM_VerificationToken";'
+docker rm -f pg-restore-test
+```
+```
+RESTORE_OK
+open-webui
+```
+
+> 🔐 Záloha obsahuje **všechna tajemství** (`.env`). Ukládejte ji mimo server (jinak při ztrátě VM přijdete o data i zálohu), šifrovaně (např. `age`, `gpg`, šifrovaný backup repozitář `restic`/`borg`) a s omezeným přístupem. Pravidelné spouštění (cron/systemd timer) a retence jsou námět na pokračování.
+
+Dokumentace: [Open WebUI – Backups](https://docs.openwebui.com/tutorials/maintenance/backups)
+
+### 8.5 Obnova (osnova)
+
+Na stejném nebo novém serveru s nainstalovaným Dockerem (kap. 4–5):
+
+```bash
+B=/opt/ai-stack-backups/<TIMESTAMP>
+sudo install -d -o "$USER" -g "$USER" -m 750 /opt/ai-stack && cd /opt/ai-stack
+cp -p "$B"/.env "$B"/docker-compose.yml "$B"/config.yaml .
+
+# 1) Postgres: spustit jen DB (prázdný volume), obnovit dump
+docker compose up -d postgres
+docker compose exec -T postgres pg_restore -U litellm -d litellm --clean --if-exists --no-owner < "$B/litellm-db.dump"
+
+# 2) Open WebUI: vytvořit volume a rozbalit do něj archiv
+docker volume create ai-stack_open-webui-data
+docker run --rm -v ai-stack_open-webui-data:/data -v "$B":/backup:ro alpine:3.24.3 \
+  tar xzf /backup/open-webui-data.tar.gz -C /data
+
+# 3) zbytek stacku
+docker compose up -d
+docker compose ps
+```
+
+> Compose při `up -d` upozorní, že volume `ai-stack_open-webui-data` „already exists but was not created by Docker Compose“. Jde jen o varování, volume se použije.
+>
+> Obnovu na **běžící** produkční instanci (přepsání existujících dat) dělejte jen se zálohou aktuálního stavu. `--clean` maže objekty v DB před obnovením.
+
+### Troubleshooting
+
+| Příznak | Příčina / řešení |
+|---|---|
+| Po `pull` + `up -d` běží pořád stará verze | V compose zůstal starý tag, nebo jste spustili `restart` místo `up -d`. Ověřte `docker compose ps` (sloupec IMAGE). |
+| LiteLLM po updatu nenaběhne, v logu chyba migrace (`prisma`, `migration`) | Vraťte tag na původní verzi. Pokud už migrace proběhla a stará verze nefunguje, obnovte DB ze zálohy (8.5). Pak hledejte řešení v release notes a issues. |
+| `pg_dump: error: connection … failed` | Postgres neběží nebo voláte špatného uživatele. Spusťte `docker compose ps postgres`. |
+| Záloha je obrovská | Nepoužili jste `--exclude=./cache`. |
+| `no space left on device` | Spusťte `docker system df`, ukliďte staré image (`docker image prune`) a staré zálohy. Logy hlídá rotace. |
+
+---
+
+## 9. Bezpečnostní poznámky
+
+Tento lab je záměrně zjednodušený. Než podobný stack nasadíte pro skutečné uživatele, projděte si tyto body.
+
+### 9.1 Tajemství
+
+- **Kde jsou:** jen v `/opt/ai-stack/.env` (práva `600`, vlastník provozní uživatel) a v zálohách. V gitu je pouze [`deploy/.env.example`](../deploy/.env.example) s placeholdery a `.env` je v `.gitignore`.
+- **Co nedělat:** nevypisovat je (`cat .env`, `docker compose config`, `docker inspect` je zobrazí v čitelné podobě), neposílat chatem ani e-mailem, nevkládat do tiketů a screenshotů.
+- **Viditelnost v kontejnerech:** proměnné prostředí kontejneru vidí každý, kdo smí na hostu spustit `docker inspect`, tedy každý ve skupině `docker`. Proto má každý kontejner jen ty proměnné, které potřebuje. Pro vyšší úroveň použijte Docker secrets nebo externí secret manager (Vault, Azure Key Vault…). LiteLLM umí načítat klíče přímo z nich.
+- **Rotace:** OpenRouter klíč a virtual keys lze kdykoli rotovat. Master key má [vlastní postup](https://docs.litellm.ai/docs/proxy/master_key_rotations). **`LITELLM_SALT_KEY` neměnit** (kap. 6.2).
+- **Únik klíče:** okamžitě ho zneplatněte u zdroje (OpenRouter → Keys, LiteLLM → Virtual Keys) a vytvořte nový.
+
+### 9.2 Skupina `docker`
+
+Členství ve skupině `docker` odpovídá **rootovi na hostu** (kap. 5.4). Přidávejte do ní jen administrátory. Socket `/var/run/docker.sock` nikdy nepřipojujte do aplikačních kontejnerů a nevystavujte ho po TCP bez TLS.
+
+### 9.3 Vystavené porty
+
+| Port | Komu je dostupný | Riziko | Doporučení pro produkci |
+|---|---|---|---|
+| 3000 (Open WebUI) | celá lab síť | přihlašovací stránka a do vytvoření admina i možnost převzít admin účet | za reverse proxy s TLS, publikovat jen `127.0.0.1:3000:8080` |
+| 4000 (LiteLLM API + Admin UI) | celá lab síť | Admin UI s heslem z env, API chráněné klíči | API jen pro aplikace, které ho potřebují. Admin UI omezit (VPN/IP allowlist) nebo vypnout (`DISABLE_ADMIN_UI`). Publikovat `127.0.0.1:4000:4000`. |
+| 5432 (Postgres) | nikomu (jen síť `ai-net`) | – | ponechat |
+
+Připomenutí: porty publikované Dockerem **obcházejí ufw** (kap. 4.4). Omezení dostupnosti řešte bindováním na `127.0.0.1`, pravidly v chainu `DOCKER-USER` nebo síťovým firewallem.
+
+### 9.4 Proč zatím nemáme HTTPS (a co s tím)
+
+**Současný stav:** Prohlížeč komunikuje s Open WebUI a klienti s LiteLLM přes **nešifrované HTTP**. Hesla, session tokeny, virtual keys i obsah konverzací jdou po síti v čitelné podobě a kdokoli ve stejné síti je může odposlechnout.
+
+**Proč to v labu zatím neřešíme:**
+- lab je izolovaná síť bez skutečných uživatelů a citlivých dat;
+- TLS vyžaduje DNS jméno a certifikát (interní CA nebo Let's Encrypt), což je samostatné téma;
+- cílem tohoto kroku je pochopit samotný AI stack a nekomplikovat ho další vrstvou.
+
+**Co s tím v produkci:**
+1. Přidat **reverse proxy** (Caddy, Traefik nebo nginx) jako další službu v compose. Bude jediná vystavená na portu 443.
+2. Certifikát z **interní CA** (např. AD CS v doméně `lab.example.com`) nebo z Let's Encrypt (pro veřejné domény, Caddy to umí automaticky).
+3. Porty 3000 a 4000 publikovat jen na `127.0.0.1` nebo vůbec, protože proxy je ve stejné Docker síti.
+4. Nastavit `WEBUI_URL=https://…` a v LiteLLM `trusted_proxy_ranges` na síť proxy, aby fungovaly IP adresy klientů a limity přihlášení.
+5. Přesměrovat HTTP → HTTPS a zapnout HSTS.
+
+Do zavedení HTTPS: **nepoužívat skutečná hesla z jiných systémů** a nevkládat do chatu citlivá data. Free modely na OpenRouteru navíc mohou prompty logovat (kap. 2.2).
+
+### 9.5 Další body
+
+- **První účet = admin:** po nasazení se hned zaregistrujte (kap. 7.5).
+- **Admin UI LiteLLM:** env přihlášení (`UI_USERNAME`/`UI_PASSWORD`) je jen pro první přihlášení. Pak vytvořte osobní admin účty a env login vypněte (kap. 6.7).
+- **Data v promptech:** LiteLLM ukládá do spend logů metadata požadavků. Ukládání obsahu promptů a odpovědí je samostatné nastavení, které je potřeba posoudit z pohledu GDPR a interních pravidel.
+- **Aktualizace:** bezpečnostní opravy vyžadují pravidelné updaty OS (`apt`), Docker Engine i image (kap. 8.3).
+
+---
+
+## 10. Další kroky
+
+Osnova pro navazující části školení:
+
+1. **Uživatelé a role v Open WebUI**
+   - role `admin`, `user`, `pending`; schvalování registrací; ruční zakládání účtů
+   - skupiny a oprávnění (přístup k modelům, funkcím, znalostním bázím)
+   - [Roles](https://docs.openwebui.com/features/authentication-access/rbac/roles)
+2. **Další modely v LiteLLM**
+   - přidání dalších free i placených modelů (OpenRouter, Anthropic, OpenAI, Azure OpenAI, lokální Ollama/vLLM)
+   - `model_name` jako alias: výměna poskytovatele bez zásahu do klientů
+   - fallbacks a load balancing mezi poskytovateli; `store_model_in_db` a správa modelů z Admin UI
+3. **Budgety a rate limity v LiteLLM**
+   - `max_budget`, `budget_duration`, `rpm_limit`, `tpm_limit` na virtual key, uživatele a tým
+   - týmy a interní uživatelé, reporting útraty
+   - [Virtual keys](https://docs.litellm.ai/docs/proxy/virtual_keys), [Cost tracking](https://docs.litellm.ai/docs/proxy/cost_tracking)
+4. **SSO**
+   - Open WebUI: OIDC (Entra ID, Keycloak) nebo LDAP proti AD `lab.example.com`, mapování skupin na role
+   - LiteLLM Admin UI: SSO pro administrátory
+   - per-user identita až do LiteLLM (`ENABLE_FORWARD_USER_INFO_HEADERS`) a útrata po uživatelích
+5. **Reverse proxy s TLS**
+   - Caddy, Traefik nebo nginx v compose, certifikát z interní CA (AD CS), DNS záznamy
+   - uzavření portů 3000 a 4000, HSTS, `trusted_proxy_ranges`
+6. **Logování do SIEM**
+   - LiteLLM callbacks (OpenTelemetry, Datadog, Langfuse, S3…) a JSON logy (`json_logs: true`)
+   - logy kontejnerů přes Docker log driver (syslog/gelf/fluentd) nebo agenta (Fluent Bit, Elastic Agent, Wazuh)
+   - auditní události: přihlášení, vytváření klíčů, změny rolí; GDPR a retence promptů
+7. **Provozní automatizace**
+   - plánované šifrované zálohy mimo server (systemd timer + restic/borg)
+   - monitoring (`/health/readiness`, Prometheus metriky), alerting
+   - nasazení přes Ansible a infrastrukturu jako kód
+
+---
+
+## 11. Odkazy
+
+| Téma | Odkaz |
+|---|---|
+| Docker Engine na Ubuntu | <https://docs.docker.com/engine/install/ubuntu/> |
+| Docker post-install (skupina docker) | <https://docs.docker.com/engine/install/linux-postinstall/> |
+| Docker security | <https://docs.docker.com/engine/security/> |
+| Docker a firewall | <https://docs.docker.com/engine/network/packet-filtering-firewalls/> |
+| Docker Compose | <https://docs.docker.com/compose/> |
+| LiteLLM – Docker quick start | <https://docs.litellm.ai/docs/proxy/docker_quick_start> |
+| LiteLLM – Config | <https://docs.litellm.ai/docs/proxy/configs> |
+| LiteLLM – Production | <https://docs.litellm.ai/docs/proxy/prod> |
+| LiteLLM – Virtual keys | <https://docs.litellm.ai/docs/proxy/virtual_keys> |
+| LiteLLM – Admin UI | <https://docs.litellm.ai/docs/proxy/ui> |
+| LiteLLM – OpenRouter | <https://docs.litellm.ai/docs/providers/openrouter> |
+| LiteLLM – releases | <https://github.com/BerriAI/litellm/releases> |
+| Open WebUI – Quick start | <https://docs.openwebui.com/getting-started/quick-start/> |
+| Open WebUI – Environment variables | <https://docs.openwebui.com/reference/env-configuration> |
+| Open WebUI – Updating | <https://docs.openwebui.com/getting-started/updating> |
+| Open WebUI – Backups | <https://docs.openwebui.com/tutorials/maintenance/backups> |
+| Open WebUI – releases | <https://github.com/open-webui/open-webui/releases> |
+| OpenRouter – API keys | <https://openrouter.ai/settings/keys> |
+| OpenRouter – limity | <https://openrouter.ai/docs/api/reference/limits> |
+
+### Použité verze (referenční lab, listopad 2026)
+
+| Komponenta | Verze |
+|---|---|
+| Ubuntu Server | 24.04 LTS, jádro 6.8.0-149 |
+| Docker Engine / Compose | 29.9.3 / v5.7.1 |
+| LiteLLM | `ghcr.io/berriai/litellm:v1.106.6` |
+| PostgreSQL | `postgres:16.15` |
+| Open WebUI | `ghcr.io/open-webui/open-webui:v0.12.5` |
+| Alpine (zálohy) | `alpine:3.24.3` |
+| Model | `openrouter/nvidia/nemotron-3-ultra-550b-a55b:free` |
