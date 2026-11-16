@@ -1,0 +1,29 @@
+# LiteLLM Proxy – konfigurace (/opt/ai-stack/config.yaml)
+# Dokumentace: https://docs.litellm.ai/docs/proxy/configs
+#
+# Hodnoty "os.environ/NAZEV" LiteLLM načte z proměnné prostředí kontejneru,
+# kterou do něj předává docker-compose.yml ze souboru .env. Tajemství tedy
+# v tomto souboru nejsou a lze ho bezpečně verzovat.
+
+model_list:
+  # model_name = veřejné jméno modelu, které uvidí klienti (Open WebUI, curl).
+  # Za ním lze kdykoli vyměnit poskytovatele, aniž by se klienti museli měnit.
+  - model_name: nemotron-3-ultra
+    litellm_params:
+      # prefix "openrouter/" = poskytovatel, zbytek = ID modelu na OpenRouteru
+      model: openrouter/nvidia/nemotron-3-ultra-550b-a55b:free
+      api_key: os.environ/OPENROUTER_API_KEY
+    model_info:
+      description: "NVIDIA Nemotron 3 Ultra přes OpenRouter (free tier)"
+
+litellm_settings:
+  # Maximální doba čekání na odpověď poskytovatele (s). Výchozí hodnota je velmi vysoká.
+  request_timeout: 600
+
+general_settings:
+  # Admin klíč proxy. Bez něj (a bez DB) nefungují virtual keys.
+  master_key: os.environ/LITELLM_MASTER_KEY
+  # Připojení k PostgreSQL (virtual keys, uživatelé, spend tracking, logy).
+  database_url: os.environ/DATABASE_URL
+  # Klienti se připojují přímo, ne přes reverse proxy – nevěřit X-Forwarded-For.
+  trusted_proxy_ranges: []

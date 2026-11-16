@@ -89,7 +89,7 @@ Tok požadavku: uživatel napíše dotaz v Open WebUI → Open WebUI ho pošle n
    ```
    Přípona `:free` je důležitá. Bez ní se použije placená varianta téhož modelu.
    [SCREENSHOT: stránka modelu NVIDIA: Nemotron 3 Ultra (free) se zvýrazněným ID modelu]
-3. **Zkontrolujte nastavení soukromí.** V **Settings → Privacy** (<https://openrouter.ai/settings/privacy>) musíte povolit použití poskytovatelů, kteří u free endpointů mohou prompty logovat nebo je použít k trénování. Jinak OpenRouter vrátí chybu typu *„No endpoints found matching your data policy“*. Důsledek: **do free modelů nepište citlivá ani firemní data.**
+3. **Zkontrolujte nastavení soukromí.** V **Settings → Privacy** (<https://openrouter.ai/settings/privacy>) určujete, které poskytovatele smí OpenRouter použít podle jejich datové politiky. Free endpointy často patří poskytovatelům, kteří si prompty mohou ukládat nebo je použít k trénování. Pokud je máte zakázané a OpenRouter nenajde vhodného poskytovatele, vrátí chybu typu *„No endpoints found matching your data policy“*. V takovém případě je povolte. Důsledek: **do free modelů nepište citlivá ani firemní data.**
    [SCREENSHOT: Settings → Privacy s povolenými free endpointy]
 4. **Vytvořte API klíč.** Otevřete **Keys** (<https://openrouter.ai/settings/keys>) → **Create Key**.
    - *Name*: např. `litellm-lab`
@@ -503,4 +503,329 @@ Dokumentace: [Docker CLI reference](https://docs.docker.com/reference/cli/docker
 
 ---
 
-*Další kapitoly (LiteLLM, Open WebUI, provoz, bezpečnost, další kroky) se doplňují průběžně.*
+## 6. Krok 3: LiteLLM Proxy a PostgreSQL
+
+**Účel:** Spustíme samotnou AI gateway. LiteLLM bude přijímat požadavky ve formátu OpenAI API na portu 4000 a přeposílat je na OpenRouter. PostgreSQL potřebuje pro **virtuální klíče, uživatele, spend tracking, logy požadavků a Admin UI**. Bez databáze funguje LiteLLM jen jako „hloupá“ proxy s jediným master key.
+
+Dokumentace: [Docker quick start](https://docs.litellm.ai/docs/proxy/docker_quick_start), [Config](https://docs.litellm.ai/docs/proxy/configs), [Production best practices](https://docs.litellm.ai/docs/proxy/prod), [OpenRouter provider](https://docs.litellm.ai/docs/providers/openrouter)
+
+### 6.1 Pracovní adresář a API klíč poskytovatele
+
+Adresář `/opt/ai-stack` bude patřit vašemu uživateli. `docker compose` čte `.env` pod právy uživatele, který ho spouští, takže by ho jinak nepřečetl. Ostatní uživatelé do adresáře nesmí (`750`).
+
+API klíč z OpenRouteru (kap. 2.2) vložíme tak, aby se **neobjevil na obrazovce ani v historii shellu**. `read -s` nezobrazuje psané znaky a proměnná se po zápisu smaže:
+
+```bash
+sudo install -d -o "$USER" -g "$USER" -m 750 /opt/ai-stack
+cd /opt/ai-stack
+umask 077
+read -rsp "OpenRouter API key: " K && echo
+printf "OPENROUTER_API_KEY=%s\n" "$K" >> .env
+unset K
+chmod 600 .env
+```
+
+**Ověření** (délka a začátek klíče, ne klíč samotný):
+
+```bash
+ls -l .env
+awk -F= '/^OPENROUTER_API_KEY=/{print "len=" length($2), "prefix=" substr($2,1,9)}' .env
+LC_ALL=C grep -c '[[:cntrl:]]' .env      # musí být 0
+```
+```
+-rw------- 1 labadmin labadmin 82 Nov 16 13:22 .env
+len=73 prefix=sk-or-v1-
+0
+```
+
+> ⚠️ **Pozor při vkládání:** Klíč vložte a hned stiskněte Enter. Pokud mezitím zmáčknete šipku, Home apod., `read` uloží do proměnné i escape sekvenci terminálu (např. `ESC [ D`). Ta na obrazovce není vidět, ale LiteLLM pak hlásí *„Forbidden control character detected in headers“* (viz Troubleshooting). Kontrolní `grep` výše to odhalí. Klíč OpenRouteru má **73 znaků**.
+
+### 6.2 Generování tajemství
+
+```bash
+cd /opt/ai-stack
+umask 077
+cat >> .env <<EOF
+
+# --- LiteLLM ---
+LITELLM_MASTER_KEY=sk-$(openssl rand -hex 32)
+LITELLM_SALT_KEY=sk-$(openssl rand -hex 32)
+UI_USERNAME=admin
+UI_PASSWORD=$(openssl rand -base64 18 | tr -d "/+=")
+
+# --- PostgreSQL ---
+POSTGRES_PASSWORD=$(openssl rand -hex 24)
+EOF
+chmod 600 .env
+cut -d= -f1 .env | grep -v '^#' | grep .      # jen názvy proměnných, ne hodnoty
+```
+```
+OPENROUTER_API_KEY
+LITELLM_MASTER_KEY
+LITELLM_SALT_KEY
+UI_USERNAME
+UI_PASSWORD
+POSTGRES_PASSWORD
+```
+
+`openssl rand -hex 32` vrátí 32 náhodných bajtů jako 64 hex znaků (256 bitů entropie). Vzor souboru je v repu jako [`deploy/.env.example`](../deploy/.env.example).
+
+#### Master key vs. virtual key
+
+| | **Master key** (`LITELLM_MASTER_KEY`) | **Virtual key** |
+|---|---|---|
+| Kdo ho má | jen administrátor gateway | uživatel, tým nebo aplikace (např. Open WebUI) |
+| Oprávnění | **vše**: volání modelů, vytváření a mazání klíčů, uživatelů, týmů, nastavení | jen volání povolených modelů |
+| Omezení | žádná | budget, rate limit (RPM/TPM), seznam modelů, expirace |
+| Spend tracking | nesleduje se po aplikacích | útrata se počítá na klíč, uživatele a tým |
+| Zneplatnění | změnou v `.env` a restartem (dotkne se všeho) | jedním klikem nebo API voláním, ostatních se to nedotkne |
+| Vznik | vygenerujete sami (`sk-` + náhodný řetězec) | vytvoří ho LiteLLM (`/key/generate` nebo Admin UI), uloží se v DB |
+
+**Pravidlo:** Master key se používá jen pro administraci. Každý klient dostane vlastní virtual key (kap. 7). Když jeden klíč unikne, zneplatníte jen ten jeden.
+
+#### Proč se salt key nesmí měnit
+
+`LITELLM_SALT_KEY` je klíč, kterým LiteLLM **šifruje citlivé hodnoty uložené v databázi**, např. API klíče poskytovatelů přidané přes Admin UI. Kdybyste ho po prvním startu změnili, LiteLLM by uložené hodnoty už nedokázal dešifrovat a modely přidané přes UI by přestaly fungovat. Neexistuje rotace „na místě“. Proto:
+- vygenerujte ho **před prvním startem** a pak už na něj nesahejte;
+- zálohujte ho spolu se zálohou databáze (záloha DB bez salt key je z části nepoužitelná).
+
+Master key naopak rotovat lze ([Rotating master key](https://docs.litellm.ai/docs/proxy/master_key_rotations)).
+
+### 6.3 Konfigurace LiteLLM: `config.yaml`
+
+Soubor [`deploy/config.yaml`](../deploy/config.yaml) zkopírujte do `/opt/ai-stack/config.yaml`:
+
+```yaml
+model_list:
+  - model_name: nemotron-3-ultra                      # jméno, které uvidí klienti
+    litellm_params:
+      model: openrouter/nvidia/nemotron-3-ultra-550b-a55b:free   # poskytovatel/ID modelu
+      api_key: os.environ/OPENROUTER_API_KEY          # klíč z proměnné prostředí
+    model_info:
+      description: "NVIDIA Nemotron 3 Ultra přes OpenRouter (free tier)"
+
+litellm_settings:
+  request_timeout: 600
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+  trusted_proxy_ranges: []
+```
+
+Klíčové body:
+- **`model_name`** je veřejné jméno modelu. Klienti volají `nemotron-3-ultra` a nevědí, že za ním je OpenRouter. Až budete chtít model vyměnit, změníte jen `litellm_params.model`.
+- **`os.environ/…`** znamená, že hodnota se čte z proměnné prostředí. V `config.yaml` tak nejsou žádná tajemství a soubor lze verzovat v gitu.
+- **`trusted_proxy_ranges: []`**: klienti se připojují přímo, ne přes reverse proxy. LiteLLM proto nevěří hlavičce `X-Forwarded-For`, kterou by jinak šlo podvrhnout (obcházení limitu přihlášení na IP).
+
+### 6.4 `docker-compose.yml`
+
+Soubor [`deploy/docker-compose.yml`](../deploy/docker-compose.yml) zkopírujte do `/opt/ai-stack/docker-compose.yml`. Ve stavu po tomto kroku obsahuje služby `postgres` a `litellm`. Finální verze v repu má navíc `open-webui` z kroku 4. Hlavní části:
+
+```yaml
+name: ai-stack
+
+x-logging: &default-logging          # rotace logů – max. 3 × 10 MB na kontejner
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+services:
+  postgres:
+    image: postgres:16.15            # pinovaná verze
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?chybí v .env}
+      POSTGRES_DB: litellm
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm -d litellm"]
+      ...
+    networks: [ai-net]               # žádné ports: → DB není zvenku dostupná
+
+  litellm:
+    image: ghcr.io/berriai/litellm:v1.106.6
+    restart: unless-stopped
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?chybí v .env}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:?chybí v .env}
+      DATABASE_URL: postgresql://litellm:${POSTGRES_PASSWORD}@postgres:5432/litellm
+      UI_USERNAME: ${UI_USERNAME:-admin}
+      UI_PASSWORD: ${UI_PASSWORD:?chybí v .env}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?chybí v .env}
+      LITELLM_MODE: PRODUCTION
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+    ports:
+      - "4000:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:4000/health/liveliness', timeout=5).status == 200 else 1)"]
+      start_period: 90s
+      ...
+```
+
+| Prvek | Proč |
+|---|---|
+| **Pinované verze image** | `latest` se mění pod rukama. Po restartu by mohla naběhnout jiná verze s jinou DB migrací. S pinovanou verzí víte, co běží, a update je vědomý krok (kap. 9). Použitá verze byla v době psaní stará alespoň 2 týdny, takže měla čas na odhalení případných chyb. |
+| **`restart: unless-stopped`** | Kontejner se po pádu nebo restartu serveru sám spustí, pokud ho ručně nezastavíte. |
+| **`healthcheck`** | Docker pravidelně ověřuje, že služba opravdu odpovídá, nejen že běží proces. Stav vidíte v `docker compose ps` (`healthy`). |
+| **`depends_on: condition: service_healthy`** | LiteLLM startuje až ve chvíli, kdy Postgres přijímá spojení. Jinak by při prvním startu spadl na chybě připojení k DB. |
+| **Python v healthchecku** | Image LiteLLM neobsahuje `curl` ani `wget`. Ověřte příkazem `docker run --rm --entrypoint sh <image> -c "which curl wget python3"`. |
+| **`${PROMĚNNÁ:?chybí v .env}`** | Pokud proměnná v `.env` chybí, `docker compose` odmítne start s jasnou chybou. Kontejner nenaběhne s prázdným heslem. |
+| **Explicitní `environment:` místo `env_file: .env`** | Každý kontejner dostane jen proměnné, které potřebuje. LiteLLM nevidí `WEBUI_SECRET_KEY` a Open WebUI nevidí API klíč OpenRouteru. |
+| **Volume `pgdata`** | Data databáze přežijí `docker compose down`, update image i restart serveru. |
+| **Rotace logů** | Výchozí `json-file` log driver logy neomezuje, na 40GB disku by je časem zaplnil. |
+| **`LITELLM_MODE: PRODUCTION`** | LiteLLM nebude uvnitř kontejneru hledat a načítat vlastní `.env`. Proměnné dodává výhradně compose. |
+
+### 6.5 Spuštění
+
+```bash
+cd /opt/ai-stack
+docker compose config --quiet && echo CONFIG_OK     # syntaktická kontrola + dosazení .env
+docker compose pull                                 # stáhne image (~2,5 GB, pár minut)
+docker compose up -d
+```
+
+**Očekávaný výstup:**
+```
+CONFIG_OK
+ ...
+ Container ai-stack-postgres-1 Started
+ Container ai-stack-postgres-1 Waiting
+ Container ai-stack-postgres-1 Healthy
+ Container ai-stack-litellm-1 Starting
+ Container ai-stack-litellm-1 Started
+```
+
+První start LiteLLM trvá 30–60 s, protože provádí migrace DB schématu. Sledujte ho:
+
+```bash
+docker compose ps
+docker compose logs -f litellm         # Ctrl+C ukončí sledování
+```
+```
+NAME                  IMAGE                              ...   STATUS                    PORTS
+ai-stack-litellm-1    ghcr.io/berriai/litellm:v1.106.6   ...   Up 34 seconds (healthy)   0.0.0.0:4000->4000/tcp, [::]:4000->4000/tcp
+ai-stack-postgres-1   postgres:16.15                     ...   Up 45 seconds (healthy)   5432/tcp
+```
+V logu hledejte:
+```
+INFO:     Uvicorn running on http://0.0.0.0:4000 (Press CTRL+C to quit)
+LiteLLM: Proxy initialized with Config, Set models:
+    nemotron-3-ultra
+```
+
+Všimněte si, že Postgres má ve sloupci PORTS jen `5432/tcp` bez `0.0.0.0:`. Port je dostupný jen uvnitř Docker sítě.
+
+### 6.6 Ověření API
+
+Pro testy si načtěte proměnné z `.env` do aktuálního shellu. Hodnoty se nevypisují, ale zůstanou v prostředí shellu, takže ho po testech zavřete:
+
+```bash
+cd /opt/ai-stack
+set -a; . ./.env; set +a
+```
+
+**a) Liveness a readiness** (bez autentizace):
+```bash
+curl -s http://localhost:4000/health/liveliness; echo
+curl -s http://localhost:4000/health/readiness | jq '{status, db}'
+```
+```
+"I'm alive!"
+{ "status": "healthy", "db": "connected" }
+```
+`liveliness` říká, že proces běží. `readiness` navíc ověřuje spojení s databází. Viz [Health checks](https://docs.litellm.ai/docs/proxy/health).
+
+**b) Seznam modelů** (vyžaduje klíč):
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:4000/v1/models      # bez klíče
+curl -s http://localhost:4000/v1/models -H "Authorization: Bearer $LITELLM_MASTER_KEY" | jq
+```
+```
+401
+{
+  "data": [ { "id": "nemotron-3-ultra", "object": "model", ... } ],
+  "object": "list"
+}
+```
+
+**c) Testovací chat completion:**
+```bash
+curl -s http://localhost:4000/v1/chat/completions \
+  -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "model": "nemotron-3-ultra",
+        "messages": [{"role": "user", "content": "Odpověz jednou větou česky: co je AI gateway?"}],
+        "max_tokens": 400
+      }' | jq '{model, content: .choices[0].message.content, usage: {prompt_tokens: .usage.prompt_tokens, completion_tokens: .usage.completion_tokens, cost: .usage.cost}}'
+```
+```json
+{
+  "model": "nemotron-3-ultra",
+  "content": "AI gateway je vrstva infrastruktury, která spravuje, zabezpečuje a optimalizuje komunikaci mezi aplikacemi a modely umělé inteligence, ...",
+  "usage": { "prompt_tokens": 33, "completion_tokens": 79, "cost": 0 }
+}
+```
+Odpověď trvá řádově jednotky sekund. Text se bude lišit, protože LLM neodpovídá deterministicky. Nemotron 3 Ultra je *reasoning* model: část `completion_tokens` tvoří „přemýšlení“ (`reasoning_tokens`), proto nenastavujte `max_tokens` příliš nízko.
+
+**d) Spend log:**
+```bash
+curl -s http://localhost:4000/spend/logs -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+  | jq -c 'sort_by(.startTime) | .[] | {startTime, model_group, total_tokens, spend, status}'
+```
+```
+{"startTime":"2026-11-16T12:27:58.174000Z","model_group":"nemotron-3-ultra","total_tokens":112,"spend":0.0,"status":"success"}
+```
+> Záznamy se do DB zapisují **dávkově** (zhruba po desítkách sekund). Pokud request hned nevidíte, zkuste to za minutu.
+
+### 6.7 Admin UI
+
+V prohlížeči otevřete `http://<IP_SERVERU>:4000/ui` a přihlaste se:
+- **Username:** `admin` (hodnota `UI_USERNAME`)
+- **Password:** hodnota `UI_PASSWORD` z `.env`. Zobrazíte ji příkazem `grep ^UI_PASSWORD /opt/ai-stack/.env`.
+
+[SCREENSHOT: přihlašovací stránka LiteLLM Admin UI]
+
+Po přihlášení si projděte:
+- **Models**: model `nemotron-3-ultra` (z `config.yaml`) [SCREENSHOT: Models]
+- **Virtual Keys**: zatím prázdné, první klíč vytvoříme v kroku 4
+- **Logs**: požadavky z testů výše, včetně neúspěšných [SCREENSHOT: Logs s testovacím requestem]
+- **Usage**: útrata (u free modelu 0 USD) a počty tokenů
+
+> 🔐 Podle [dokumentace](https://docs.litellm.ai/docs/proxy/ui) jsou `UI_USERNAME`/`UI_PASSWORD` určené jen pro první přihlášení. V produkci vytvořte v Admin UI osobní účty adminů (*Internal Users*) a přihlášení přes proměnné prostředí vypněte (`general_settings.disable_env_credential_login: true`). Pokud `UI_PASSWORD` nenastavíte, do UI se lze přihlásit **master key**.
+
+**Ověření z příkazové řádky** (když nemáte po ruce prohlížeč):
+```bash
+curl -s -o /dev/null -w "%{http_code} -> %{redirect_url}\n" -X POST http://localhost:4000/login \
+  --data-urlencode "username=$UI_USERNAME" --data-urlencode "password=$UI_PASSWORD"
+```
+```
+303 -> http://localhost:4000/ui?login=success
+```
+
+### Troubleshooting
+
+| Příznak | Příčina / řešení |
+|---|---|
+| `required variable LITELLM_MASTER_KEY is missing a value: chybí v .env` | V `.env` chybí proměnná nebo spouštíte `docker compose` z jiného adresáře. `.env` se čte z aktuálního adresáře. |
+| `open /opt/ai-stack/.env: permission denied` | `.env` patří rootovi. Opravte: `sudo chown $USER: /opt/ai-stack/.env`. |
+| `litellm` zůstává `starting`/`unhealthy`, v logu `Can't reach database server at postgres:5432` | Postgres ještě nenaběhl nebo nesedí heslo. Pozor: **heslo DB se nastavuje jen při prvním startu prázdného volume.** Pokud jste `POSTGRES_PASSWORD` v `.env` změnili až potom, databáze má pořád staré heslo. V labu lze volume smazat (`docker compose down -v`, **smaže data!**). Jinak změňte heslo v DB přes `ALTER USER`. |
+| `500 … Forbidden control character detected in headers. Potential header injection attack.` | V API klíči v `.env` je neviditelný řídicí znak, typicky escape sekvence po stisku šipky při vkládání nebo `\r` z Windows. Zkontrolujte `LC_ALL=C grep -c '[[:cntrl:]]' .env` a délku klíče (73). Opravte řádek a spusťte `docker compose up -d`. |
+| `401 … Authentication Error` při volání OpenRouteru | Neplatný nebo smazaný OpenRouter klíč. Vytvořte nový. |
+| `401` na `/v1/models` i s klíčem | Chybí `Bearer ` v hlavičce, nebo jste použili jiný klíč než `LITELLM_MASTER_KEY`. Pozor na prázdnou proměnnou, pokud jste nespustili `set -a; . ./.env`. |
+| `429 Too Many Requests` / `rate limit` | Vyčerpán limit free modelů OpenRouteru (20/min, 50/den). Počkejte, nebo použijte jiný účet či klíč. |
+| `404 … No endpoints found matching your data policy` | Nastavení soukromí na OpenRouteru vylučuje všechny poskytovatele free modelu (kap. 2.2, bod 3). |
+| `Invalid model name passed in model=…` | Klient volá jiné jméno než `model_name` v `config.yaml` (např. ID z OpenRouteru místo `nemotron-3-ultra`). |
+| Admin UI se nenačte zvenku, lokálně `curl` funguje | Síťový firewall mezi vámi a VM blokuje port 4000, nebo voláte špatnou IP. |
+| Změna v `config.yaml` se neprojevila | Config se čte při startu: `docker compose restart litellm`. |
+
+---
+
+*Další kapitoly (Open WebUI, provoz, bezpečnost, další kroky) se doplňují průběžně.*
