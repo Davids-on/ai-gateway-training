@@ -828,4 +828,212 @@ curl -s -o /dev/null -w "%{http_code} -> %{redirect_url}\n" -X POST http://local
 
 ---
 
-*Další kapitoly (Open WebUI, provoz, bezpečnost, další kroky) se doplňují průběžně.*
+## 7. Krok 4: Open WebUI
+
+**Účel:** Uživatelé nebudou volat API přes `curl`. Dostanou webové chatovací rozhraní. Open WebUI se připojí k LiteLLM jako k „OpenAI“ serveru, s vlastním **virtual key** a přes **interní Docker síť**.
+
+Dokumentace: [Open WebUI – Quick start](https://docs.openwebui.com/getting-started/quick-start/), [Environment variables](https://docs.openwebui.com/reference/env-configuration), [OpenAI-compatible providers](https://docs.openwebui.com/getting-started/quick-start/connect-a-provider/starting-with-openai-compatible/)
+
+### 7.1 Virtual key pro Open WebUI
+
+Proč ne master key:
+- **Princip nejmenších oprávnění.** Open WebUI potřebuje jen volat modely. Master key by mu dal i právo vytvářet a mazat klíče, uživatele a nastavení. I dokumentace Open WebUI doporučuje pro proxy jako LiteLLM *least-privilege* klíče.
+- **Spend tracking.** Útrata a logy se v LiteLLM přiřadí ke klíči `open-webui`. Uvidíte, kolik stojí webové UI v porovnání s ostatními aplikacemi.
+- **Bezpečné odvolání.** Pokud klíč unikne (např. ze zálohy volume Open WebUI), zneplatníte jen jeho. Ostatní klienti ani admin přístup se změny nedotknou.
+
+Klíč vytvoříme API voláním s master key a jeho hodnotu rovnou zapíšeme do `.env`, bez vypsání na obrazovku:
+
+```bash
+cd /opt/ai-stack
+set -a; . ./.env; set +a
+umask 077
+
+resp=$(curl -s http://localhost:4000/key/generate \
+  -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"key_alias":"open-webui","models":["nemotron-3-ultra"],"metadata":{"service":"open-webui"}}')
+
+echo "$resp" | jq -c '{key_alias, models, key_prefix: .key[0:5]}'
+
+printf "\n# --- Open WebUI ---\nOPENWEBUI_LITELLM_KEY=%s\nWEBUI_SECRET_KEY=%s\nWEBUI_URL=http://<IP_SERVERU>:3000\n" \
+  "$(echo "$resp" | jq -r .key)" "$(openssl rand -hex 32)" >> .env
+chmod 600 .env
+unset resp
+```
+```
+{"key_alias":"open-webui","models":["nemotron-3-ultra"],"key_prefix":"sk-UK"}
+```
+
+- `"models": ["nemotron-3-ultra"]` omezí klíč jen na tento model. Model přidaný později do `config.yaml` tento klíč automaticky neuvidí.
+- Stejně lze nastavit i `max_budget`, `rpm_limit`, `tpm_limit` nebo `duration` (expirace). Viz [Virtual keys](https://docs.litellm.ai/docs/proxy/virtual_keys).
+- Klíč můžete vytvořit i v Admin UI: **Virtual Keys → + Create New Key** [SCREENSHOT: vytvoření virtual key v Admin UI]. Hodnota klíče se zobrazí **jen jednou**.
+- `WEBUI_SECRET_KEY` podepisuje přihlašovací tokeny (JWT) Open WebUI. Když ho změníte, odhlásí se všichni uživatelé.
+
+### 7.2 Služba `open-webui` v compose
+
+Do `docker-compose.yml` přibude služba a volume. Finální soubor je [`deploy/docker-compose.yml`](../deploy/docker-compose.yml):
+
+```yaml
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:v0.12.5
+    restart: unless-stopped
+    environment:
+      OPENAI_API_BASE_URL: http://litellm:4000/v1
+      OPENAI_API_KEY: ${OPENWEBUI_LITELLM_KEY:?chybí v .env}
+      ENABLE_OLLAMA_API: "False"
+      WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:?chybí v .env}
+      WEBUI_URL: ${WEBUI_URL:-http://localhost:3000}
+      DEFAULT_USER_ROLE: pending
+    volumes:
+      - open-webui-data:/app/backend/data
+    ports:
+      - "3000:8080"
+    depends_on:
+      litellm:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl --silent --fail http://localhost:8080/health | jq -ne 'input.status == true' || exit 1"]
+      start_period: 120s
+      ...
+    networks: [ai-net]
+
+volumes:
+  pgdata:
+  open-webui-data:
+```
+
+| Prvek | Vysvětlení |
+|---|---|
+| `http://litellm:4000/v1` | Docker Compose ve vlastní síti poskytuje **DNS podle jména služby**. Open WebUI se k LiteLLM dostane interně a provoz neopouští hosta. Nepoužívejte `localhost`, uvnitř kontejneru znamená ten kontejner sám. |
+| `ports: "3000:8080"` | Open WebUI v kontejneru poslouchá na 8080. Na hostu ho vystavíme na 3000. |
+| `ENABLE_OLLAMA_API: "False"` | Lokální Ollamu nemáme. Bez tohoto nastavení UI zkouší připojení a do logu píše chyby. |
+| `DEFAULT_USER_ROLE: pending` | Každý další registrovaný uživatel musí počkat, až ho admin schválí. |
+| volume `open-webui-data` | uživatelé, chaty, nastavení (SQLite DB), nahrané soubory, cache embedding modelu |
+| `depends_on … service_healthy` | Open WebUI startuje, až když LiteLLM odpovídá, takže při startu načte seznam modelů. |
+
+> ⚠️ **Past: „ConfigVar“ proměnné se čtou jen při prvním startu.**
+> `OPENAI_API_BASE_URL`, `OPENAI_API_KEY`, `ENABLE_OLLAMA_API`, `DEFAULT_USER_ROLE`, `ENABLE_SIGNUP` a další si Open WebUI při **prvním** startu uloží do své databáze. Od té chvíle platí hodnota z databáze a změna v `.env` se **ignoruje**. Proto:
+> - virtual key musí být v `.env` **dřív**, než Open WebUI poprvé spustíte;
+> - pozdější změnu (např. nový klíč) proveďte v **Admin Panel → Settings → Connections**;
+> - alternativa je `ENABLE_PERSISTENT_CONFIG=False`, kdy se proměnné čtou při každém startu, ale změny z UI se po restartu ztratí.
+
+### 7.3 Spuštění
+
+```bash
+cd /opt/ai-stack
+docker compose config --quiet && echo CONFIG_OK
+docker compose pull open-webui         # ~6,5 GB, chvíli to potrvá
+docker compose up -d
+docker compose ps
+```
+```
+NAME                    ...   STATUS                    PORTS
+ai-stack-litellm-1      ...   Up 36 minutes (healthy)   0.0.0.0:4000->4000/tcp, [::]:4000->4000/tcp
+ai-stack-open-webui-1   ...   Up 55 seconds (healthy)   0.0.0.0:3000->8080/tcp, [::]:3000->8080/tcp
+ai-stack-postgres-1     ...   Up 37 minutes (healthy)   5432/tcp
+```
+
+Při prvním startu Open WebUI stahuje z Hugging Face embedding model `sentence-transformers/all-MiniLM-L6-v2` (pro práci s dokumenty, RAG). V logu uvidíte `Fetching 30 files…` a varování `You are sending unauthenticated requests to the HF Hub`, které můžete ignorovat. Model se uloží do volume, další starty už ho nestahují.
+
+```bash
+docker compose logs -f open-webui
+```
+
+### 7.4 Ověření konektivity (CLI)
+
+```bash
+# Open WebUI vidí model přes LiteLLM s virtual key
+docker compose exec -T open-webui sh -c \
+  'curl -s http://litellm:4000/v1/models -H "Authorization: Bearer $OPENAI_API_KEY" | jq -c "[.data[].id]"'
+
+# Virtual key NEMÁ admin práva (vytvoření klíče musí selhat)
+docker compose exec -T open-webui sh -c \
+  'curl -s -o /dev/null -w "%{http_code}\n" http://litellm:4000/key/generate -H "Authorization: Bearer $OPENAI_API_KEY" -d "{}"'
+
+# Kontejner Open WebUI nevidí tajemství, která nepotřebuje
+docker compose exec -T open-webui sh -c 'env | cut -d= -f1 | grep -E "LITELLM_MASTER|OPENROUTER|SALT|POSTGRES" || echo none'
+
+curl -s http://localhost:3000/health; echo
+```
+```
+["nemotron-3-ultra"]
+401
+none
+{"status":true}
+```
+
+### 7.5 První přihlášení: admin účet
+
+> ⚠️ **První zaregistrovaný účet se automaticky stane administrátorem.**
+> Dokud se nikdo nezaregistruje, může admin účet „obsadit“ **kdokoli**, kdo se k portu 3000 dostane jako první. Proto:
+> - zaregistrujte se **hned po prvním startu**, ještě než adresu komukoli pošlete;
+> - stav ověříte příkazem `curl -s http://localhost:3000/api/config | jq .onboarding`. Hodnota `true` znamená, že admin ještě neexistuje.
+> - Alternativa pro automatizované nasazení: proměnné `WEBUI_ADMIN_EMAIL` a `WEBUI_ADMIN_PASSWORD` vytvoří admina už při startu a registraci vypnou. Viz [First-run bootstrap window](https://docs.openwebui.com/security/accepted-risks/first-run-bootstrap-window).
+
+1. Otevřete `http://<IP_SERVERU>:3000`.
+2. Klikněte na **Get started** a vyplňte jméno, e-mail a heslo. E-mail slouží jen jako přihlašovací jméno, nic se na něj neposílá.
+   [SCREENSHOT: registrační formulář prvního (admin) účtu]
+3. Po přihlášení zkontrolujte, že v **Admin Panel → Users** máte roli `admin`.
+   [SCREENSHOT: Admin Panel → Users s rolí admin]
+
+Po založení admina:
+```bash
+curl -s http://localhost:3000/api/config | jq -c '{version, onboarding, enable_signup: .features.enable_signup}'
+```
+```
+{"version":"0.12.5","onboarding":null,"enable_signup":false}
+```
+V referenčním labu byla po registraci admina registrace dalších uživatelů vypnutá (`enable_signup: false`). Studenty pak přidáte ručně (**Admin Panel → Users → +**), nebo registraci zapnete v **Admin Panel → Settings → General**. Díky `DEFAULT_USER_ROLE: pending` je pak budete schvalovat.
+
+### 7.6 Ověření: chat přes celý řetězec
+
+1. V horní části obrazovky vyberte model **`nemotron-3-ultra`**. Open WebUI ho načetlo z `GET /v1/models` v LiteLLM.
+   [SCREENSHOT: výběr modelu nemotron-3-ultra]
+2. Napište testovací dotaz, např. *„Co je AI gateway? Odpověz třemi větami.“*
+3. Během pár sekund přijde odpověď. Reasoning modely může UI zobrazit s rozbalovacím blokem „Thinking“.
+   [SCREENSHOT: odpověď modelu v chatu]
+
+**Ověření na straně LiteLLM:**
+
+```bash
+cd /opt/ai-stack; set -a; . ./.env; set +a
+
+# requesty z Open WebUI v access logu (IP kontejneru open-webui v síti ai-net)
+docker compose logs --since 10m litellm | grep -E "POST /v1/chat/completions"
+
+# spend log s aliasem klíče
+curl -s http://localhost:4000/spend/logs -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+  | jq -c 'sort_by(.startTime) | .[-3:][] | {startTime, key_alias: .metadata.user_api_key_alias, model_group, total_tokens, status}'
+
+# souhrn za klíč
+curl -s "http://localhost:4000/key/info?key=$OPENWEBUI_LITELLM_KEY" -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+  | jq -c '.info | {key_alias, models, spend, last_active}'
+```
+```
+litellm-1  | INFO:     172.18.0.4:53814 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+litellm-1  | INFO:     172.18.0.4:53808 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+
+{"startTime":"2026-11-16T13:09:46.595000Z","key_alias":"open-webui","model_group":"nemotron-3-ultra","total_tokens":579,"status":"success"}
+
+{"key_alias":"open-webui","models":["nemotron-3-ultra"],"spend":0.0,"last_active":"2026-11-16T13:10:11.693000+00:00"}
+```
+
+V Admin UI LiteLLM (`http://<IP_SERVERU>:4000/ui` → **Logs**) je request vidět s klíčem `open-webui`. [SCREENSHOT: LiteLLM Logs s requestem od klíče open-webui]
+
+> 💡 **Proč dva požadavky na jeden dotaz?** Open WebUI kromě vlastní odpovědi posílá na pozadí další požadavky na stejný model, např. **vygenerování názvu chatu**, tagů nebo návrhů dalších otázek. Tyto *tasks* se taky počítají do limitů a útraty. U free modelu s limitem 50 požadavků denně je to znát. Lze je vypnout nebo přesměrovat na jiný model v **Admin Panel → Settings → Interface**.
+
+### Troubleshooting
+
+| Příznak | Příčina / řešení |
+|---|---|
+| V nabídce není žádný model | Open WebUI se nedostane k LiteLLM nebo má špatný klíč. Spusťte test z 7.4 a podívejte se do `docker compose logs open-webui`. Zkontrolujte **Admin Panel → Settings → Connections** (URL `http://litellm:4000/v1` a klíč). Pamatujte, že změna v `.env` se po prvním startu neprojeví (ConfigVar). |
+| `401` / `Authentication Error` v chatu | Virtual key byl smazán nebo zablokován v LiteLLM. Vytvořte nový a vložte ho v **Settings → Connections**. |
+| `key not allowed to access model` | Klíč má v `models` jiný seznam. Upravte klíč v Admin UI LiteLLM. |
+| `open-webui` dlouho `starting` / `unhealthy` | První start stahuje embedding model (pomalý internet, blokovaný `huggingface.co`). Sledujte `docker compose logs -f open-webui`. Bez přístupu na HF použijte `OFFLINE_MODE=True`, ale RAG pak nebude fungovat. |
+| Někdo jiný se stal adminem | V labu: `docker compose down`, `docker volume rm ai-stack_open-webui-data` (**smaže všechny chaty a uživatele**), `docker compose up -d` a ihned se zaregistrujte. |
+| `429` v chatu | Limit free modelu na OpenRouteru (20/min, 50/den), viz kap. 2.2. Zvýší ho i tasks Open WebUI (název chatu atd.). |
+| Port 3000 nedostupný z prohlížeče | Ověřte `curl -I http://localhost:3000` na serveru. Pokud lokálně funguje, blokuje to síťový firewall mezi vámi a VM. |
+
+---
+
+*Další kapitoly (provoz, bezpečnost, další kroky) se doplňují průběžně.*
