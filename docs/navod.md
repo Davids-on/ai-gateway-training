@@ -298,4 +298,209 @@ sudo ufw disable         # jen pokud je aktivní
 
 ---
 
-*Další kapitoly (Docker, LiteLLM, Open WebUI, provoz, bezpečnost, další kroky) se doplňují průběžně.*
+## 5. Krok 2: Docker Engine a Docker Compose
+
+**Účel:** Celý AI stack poběží v kontejnerech. Instalujeme **Docker Engine z oficiálního apt repozitáře Dockeru**, ne balíček `docker.io` z Ubuntu ani snap.
+
+| Zdroj | Proč ho nepoužijeme |
+|---|---|
+| `docker.io` (Ubuntu) | Starší verze. Compose plugin bývá zastaralý nebo chybí. |
+| `snap install docker` | Omezení confinementu (přístup do `/opt`, bind mounty), jiné cesty a jiné chování při aktualizacích. |
+| **`download.docker.com`** | Aktuální verze přímo od Dockeru včetně pluginů `compose` a `buildx`. Tento postup popisuje oficiální dokumentace. |
+
+Dokumentace: [Install Docker Engine on Ubuntu](https://docs.docker.com/engine/install/ubuntu/)
+
+### 5.1 Odstranění případných starých balíčků
+
+Na čisté VM nic nenajde. Pokud v kroku 0 vyšel nějaký konflikt, odstraňte ho:
+
+```bash
+for pkg in docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc; do
+  sudo apt-get remove -y $pkg 2>/dev/null
+done
+sudo snap remove docker 2>/dev/null || true
+```
+
+### 5.2 Přidání apt repozitáře Dockeru
+
+```bash
+# GPG klíč, kterým Docker podepisuje balíčky
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+# Definice repozitáře (nový formát deb822)
+sudo tee /etc/apt/sources.list.d/docker.sources >/dev/null <<EOF
+Types: deb
+URIs: https://download.docker.com/linux/ubuntu
+Suites: $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
+Components: stable
+Architectures: $(dpkg --print-architecture)
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF
+
+sudo apt-get update
+```
+
+**Ověření:**
+
+```bash
+gpg --show-keys --with-fingerprint /etc/apt/keyrings/docker.asc | sed -n 2p
+```
+```
+      9DC8 5822 9FC7 DD38 854A  E2D8 8D81 803C 0EBF CD88
+```
+Fingerprint musí odpovídat hodnotě v oficiální dokumentaci.
+
+Ve výstupu `apt-get update` musí být řádky s `download.docker.com`:
+```
+Get:5 https://download.docker.com/linux/ubuntu noble InRelease [48.5 kB]
+Get:6 https://download.docker.com/linux/ubuntu noble/stable amd64 Packages [73.8 kB]
+```
+
+> **Proč `Signed-By`:** Klíč Dockeru platí jen pro tento repozitář, ne pro všechny. Kdyby někdo podvrhl balíček v jiném repozitáři, klíč Dockeru ho „nepodepíše“.
+
+### 5.3 Instalace
+
+```bash
+sudo DEBIAN_FRONTEND=noninteractive apt-get -y install \
+  docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+```
+
+| Balíček | Obsah |
+|---|---|
+| `docker-ce` | Docker Engine, démon `dockerd` |
+| `docker-ce-cli` | klient, příkaz `docker` |
+| `containerd.io` | container runtime, na kterém Docker staví |
+| `docker-buildx-plugin` | `docker buildx`, moderní sestavování image |
+| `docker-compose-plugin` | `docker compose` (Compose v2+, bez pomlčky) |
+
+Služba `docker` se po instalaci sama spustí a je povolená po startu systému:
+
+```bash
+systemctl is-enabled docker containerd; systemctl is-active docker
+```
+```
+enabled
+enabled
+active
+```
+
+### 5.4 Uživatel ve skupině `docker`
+
+**Účel:** Bez `sudo` ovládá Docker jen root. Přidáním do skupiny `docker` získá uživatel přístup k socketu `/var/run/docker.sock`.
+
+```bash
+sudo usermod -aG docker $USER
+```
+
+Členství ve skupině se projeví **až v novém přihlášení**. Odhlaste se, znovu se připojte přes SSH a ověřte:
+
+```bash
+id -nG
+```
+```
+labadmin adm cdrom sudo dip plugdev lxd docker
+```
+
+> ⚠️ **Bezpečnostní dopad: skupina `docker` = root.**
+> Kdo smí mluvit s Docker démonem, může spustit kontejner s připojeným kořenovým souborovým systémem hosta a v něm dělat cokoli jako root:
+> ```bash
+> docker run --rm -it -v /:/host alpine chroot /host   # = root shell na hostu
+> ```
+> Proto:
+> - do skupiny `docker` přidávejte jen ty, kdo by stejně měli `sudo`;
+> - socket `/var/run/docker.sock` nikdy nevystavujte po síti ani do kontejnerů, které ho nepotřebují;
+> - kde root ekvivalent nechcete, zvažte [rootless mode](https://docs.docker.com/engine/security/rootless/).
+>
+> Více: [Docker security](https://docs.docker.com/engine/security/), [Linux post-installation steps](https://docs.docker.com/engine/install/linux-postinstall/).
+
+### 5.5 Ověření
+
+```bash
+docker version --format "Client {{.Client.Version}} / Server {{.Server.Version}}"
+docker compose version
+docker run --rm hello-world
+```
+
+**Očekávaný výstup:**
+```
+Client 29.9.3 / Server 29.9.3
+Docker Compose version v5.7.1
+
+Unable to find image 'hello-world:latest' locally
+latest: Pulling from library/hello-world
+...
+Hello from Docker!
+This message shows that your installation appears to be working correctly.
+...
+```
+
+`hello-world` ověří celý řetězec najednou: klient → démon → stažení image z Docker Hubu → spuštění kontejneru → výstup zpět do terminálu.
+
+```bash
+docker info --format "Storage: {{.Driver}}  Cgroup: {{.CgroupDriver}} v{{.CgroupVersion}}  Root: {{.DockerRootDir}}"
+```
+```
+Storage: overlayfs  Cgroup: systemd v2  Root: /var/lib/docker
+```
+
+> Verze v ukázkách odpovídají referenčnímu labu (listopad 2026). U vás mohou být novější. Zde to nevadí, Docker Engine se aktualizuje přes `apt`. Pevné verze naopak budeme držet u **image** aplikací.
+
+### 5.6 Tahák: základní příkazy Dockeru
+
+**Image:**
+
+| Příkaz | Co dělá |
+|---|---|
+| `docker images` | seznam stažených image |
+| `docker pull <image>:<tag>` | stáhne image z registru |
+| `docker rmi <image>` | smaže image (nesmí ho používat žádný kontejner) |
+
+**Kontejnery:**
+
+| Příkaz | Co dělá |
+|---|---|
+| `docker ps` / `docker ps -a` | běžící / všechny kontejnery |
+| `docker logs -f --tail 100 <kontejner>` | posledních 100 řádků logu a dál sleduje (`Ctrl+C` ukončí) |
+| `docker exec -it <kontejner> sh` | shell uvnitř běžícího kontejneru |
+| `docker inspect <kontejner>` | kompletní konfigurace v JSON (síť, volumes, env) |
+| `docker stats --no-stream` | aktuální spotřeba CPU a RAM kontejnerů |
+| `docker stop <k>` / `docker start <k>` / `docker rm <k>` | zastaví / spustí / smaže kontejner |
+
+**Volumes, sítě a disk:**
+
+| Příkaz | Co dělá |
+|---|---|
+| `docker volume ls` / `docker volume inspect <v>` | seznam / detail volumes |
+| `docker network ls` | seznam sítí |
+| `docker system df` | kolik místa zabírají image, kontejnery a volumes |
+
+**Docker Compose** (spouští se v adresáři s `docker-compose.yml`):
+
+| Příkaz | Co dělá |
+|---|---|
+| `docker compose up -d` | vytvoří a spustí vše na pozadí. Změněné služby znovu vytvoří, nezměněné nechá. |
+| `docker compose ps` | stav služeb včetně healthchecku (`healthy`/`unhealthy`) |
+| `docker compose logs -f <služba>` | logy služby |
+| `docker compose restart <služba>` | restart (nenačte změny v compose ani `.env`, na to je `up -d`) |
+| `docker compose pull` | stáhne image podle verzí v compose |
+| `docker compose config` | zobrazí výslednou konfiguraci po dosazení proměnných z `.env` (**vypíše i tajemství!**) |
+| `docker compose down` | zastaví a smaže kontejnery a síť. **Volumes zůstanou.** |
+| `docker compose down -v` | ⚠️ smaže **i volumes**, tedy všechna data |
+
+Dokumentace: [Docker CLI reference](https://docs.docker.com/reference/cli/docker/), [Docker Compose](https://docs.docker.com/compose/), [docker compose CLI](https://docs.docker.com/reference/cli/docker/compose/)
+
+### Troubleshooting
+
+| Příznak | Příčina / řešení |
+|---|---|
+| `permission denied while trying to connect to the docker API at unix:///var/run/docker.sock` | Členství ve skupině `docker` se ještě neprojevilo. Odhlaste se a znovu přihlaste. Pozor: SSH s `ControlMaster`/`ControlPersist` (multiplexing) může znovu použít staré spojení se starými skupinami. Ukončete ho přes `ssh -O exit <host>`, případně dočasně použijte `newgrp docker`. |
+| `NO_PUBKEY 8D81803C0EBFCD88` při `apt-get update` | Chybí nebo je nečitelný GPG klíč. Zkontrolujte `/etc/apt/keyrings/docker.asc` a jeho práva (`chmod a+r`). |
+| `Conflicting values set for option Signed-By` | Repozitář Dockeru je definovaný dvakrát, např. starý `docker.list` a nový `docker.sources`. Jeden smažte. |
+| `toomanyrequests: You have reached your pull rate limit` | Limit anonymních stahování z Docker Hubu (sdílená veřejná IP celé učebny). Přihlaste se `docker login` nebo použijte registry mirror. |
+| `docker: command not found` po instalaci přes snap | Odinstalujte snap (`sudo snap remove docker`) a postupujte podle 5.2–5.3. |
+
+---
+
+*Další kapitoly (LiteLLM, Open WebUI, provoz, bezpečnost, další kroky) se doplňují průběžně.*
