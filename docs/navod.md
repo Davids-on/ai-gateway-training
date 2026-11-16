@@ -201,4 +201,101 @@ https://openrouter.ai/api/v1/models           -> 200
 
 ---
 
-*Další kapitoly (příprava systému, Docker, LiteLLM, Open WebUI, provoz, bezpečnost, další kroky) se doplňují průběžně.*
+## 4. Krok 1: Příprava systému
+
+### 4.1 Aktualizace balíčků
+
+**Účel:** Začínáme z aktuálního, opraveného systému. Bezpečnostní záplaty a novější jádro předejdou chybám, které už jsou dávno opravené.
+
+```bash
+sudo apt-get update
+sudo DEBIAN_FRONTEND=noninteractive apt-get -y \
+  -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade
+```
+
+- `DEBIAN_FRONTEND=noninteractive` potlačí interaktivní dialogy.
+- `--force-confdef --force-confold` zachovají vaše konfigurační soubory, pokud se balíček ptá, zda je přepsat.
+
+**Očekávaný výstup (konec):**
+```
+... upgraded, ... newly installed, 0 to remove and 3 not upgraded.
+```
+
+> Hláška „*N not upgraded*“ je u Ubuntu 24.04 běžná. Jde o **phased updates**: Canonical vydává některé aktualizace postupně jen části strojů. Takové balíčky se doinstalují samy později. Nevynucujte je.
+
+**Restart, pokud je potřeba:**
+```bash
+ls /var/run/reboot-required && cat /var/run/reboot-required.pkgs
+sudo systemctl reboot
+```
+Pokud soubor `/var/run/reboot-required` existuje (typicky po aktualizaci jádra, `dbus`, `apparmor` nebo `systemd`), restartujte. Po restartu se znovu připojte přes SSH.
+
+### 4.2 Časové pásmo
+
+**Účel:** Logy kontejnerů, záznamy o spotřebě a zálohy budou mít čas, kterému rozumíme. Synchronizovaný čas je navíc nutný pro TLS certifikáty a později pro SSO (Kerberos, OIDC tokeny).
+
+```bash
+sudo timedatectl set-timezone Europe/Prague
+timedatectl
+```
+
+**Očekávaný výstup:**
+```
+               Local time: Mon 2026-11-16 07:58:30 CET
+                Time zone: Europe/Prague (CET, +0100)
+System clock synchronized: yes
+              NTP service: active
+```
+
+> Hned po restartu může chvíli svítit `System clock synchronized: no`. `systemd-timesyncd` potřebuje několik desítek sekund na první kontakt s NTP serverem. Ověřte znovu za minutu.
+
+### 4.3 Základní nástroje
+
+```bash
+sudo DEBIAN_FRONTEND=noninteractive apt-get -y install curl jq ca-certificates gnupg openssl
+```
+
+| Nástroj | K čemu ho potřebujeme |
+|---|---|
+| `curl` | stažení GPG klíče Dockeru, testování API LiteLLM |
+| `jq` | čitelné formátování a filtrování JSON odpovědí |
+| `ca-certificates` | ověřování HTTPS certifikátů (apt repozitář Dockeru, OpenRouter) |
+| `gnupg` | práce s GPG klíči apt repozitářů |
+| `openssl` | generování náhodných tajemství (master key, salt key) |
+
+**Ověření:**
+```bash
+curl --version | head -1; jq --version; openssl version
+```
+```
+curl 8.5.0 (x86_64-pc-linux-gnu) ...
+jq-1.7
+OpenSSL 3.0.13 30 Jan 2024 ...
+```
+
+### 4.4 Lokální firewall
+
+**Rozhodnutí pro lab:** Lokální firewall (`ufw`) necháváme **vypnutý**. Jde o izolovaný lab a chceme se soustředit na AI stack.
+
+```bash
+sudo ufw status          # na čisté instalaci: Status: inactive
+sudo ufw disable         # jen pokud je aktivní
+```
+
+> ⚠️ **Docker a ufw:** I se zapnutým `ufw` by porty publikované Dockerem (`ports:` v compose) byly z ostatních počítačů **stejně dostupné**. Docker si zapisuje vlastní pravidla do iptables/nftables (chain `DOCKER`) a ta se vyhodnocují dřív než pravidla ufw. Pro produkci proto:
+> - publikujte porty jen na konkrétní IP, např. `127.0.0.1:4000:4000`, a ven vystavte pouze reverse proxy;
+> - nebo filtrujte v chainu `DOCKER-USER`, případně na síťovém firewallu před serverem.
+>
+> Viz [Docker docs – Packet filtering and firewalls](https://docs.docker.com/engine/network/packet-filtering-firewalls/).
+
+### Troubleshooting
+
+| Příznak | Příčina / řešení |
+|---|---|
+| `Could not get lock /var/lib/dpkg/lock-frontend` | Na pozadí běží `unattended-upgrades` (typicky po prvním startu VM). Počkejte, až doběhne: `ps aux \| grep -i apt`. Zámky nemažte ručně. |
+| `apt-get update` hlásí `Temporary failure resolving` | Nefunguje DNS: `resolvectl status`. |
+| `System clock synchronized: no` i po několika minutách | NTP (UDP 123) je blokované. Nastavte interní NTP server (např. DC) v `/etc/systemd/timesyncd.conf` → `NTP=...` a spusťte `sudo systemctl restart systemd-timesyncd`. |
+
+---
+
+*Další kapitoly (Docker, LiteLLM, Open WebUI, provoz, bezpečnost, další kroky) se doplňují průběžně.*
