@@ -1,4 +1,4 @@
-# AI stack: LiteLLM Proxy + PostgreSQL (+ Open WebUI ve fázi 4)
+# AI stack: Open WebUI -> LiteLLM Proxy -> OpenRouter; PostgreSQL pro LiteLLM
 # Umístění na serveru: /opt/ai-stack/docker-compose.yml
 # Tajemství se načítají z /opt/ai-stack/.env (vzor: .env.example).
 
@@ -64,8 +64,43 @@ services:
     networks: [ai-net]
     logging: *default-logging
 
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:v0.12.5
+    restart: unless-stopped
+    environment:
+      # Napojení na LiteLLM přes interní Docker síť (jméno služby = DNS jméno).
+      # POZOR: OPENAI_API_* jsou "ConfigVar" – načtou se jen při PRVNÍM startu,
+      # pak platí hodnoty uložené v DB (Admin Panel → Settings → Connections).
+      OPENAI_API_BASE_URL: http://litellm:4000/v1
+      # Virtual key z LiteLLM, NE master key.
+      OPENAI_API_KEY: ${OPENWEBUI_LITELLM_KEY:?chybí v .env}
+      # Ollama v labu nepoužíváme – jinak UI hlásí chyby připojení.
+      ENABLE_OLLAMA_API: "False"
+      # Podepisování session tokenů (JWT). Změna = odhlášení všech uživatelů.
+      WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:?chybí v .env}
+      WEBUI_URL: ${WEBUI_URL:-http://localhost:3000}
+      # Noví uživatelé (po prvním adminovi) čekají na schválení adminem.
+      DEFAULT_USER_ROLE: pending
+    volumes:
+      - open-webui-data:/app/backend/data
+    ports:
+      - "3000:8080"
+    depends_on:
+      litellm:
+        condition: service_healthy
+    healthcheck:
+      # Stejný test, jaký má image vestavěný – uveden explicitně pro přehlednost.
+      test: ["CMD-SHELL", "curl --silent --fail http://localhost:8080/health | jq -ne 'input.status == true' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    networks: [ai-net]
+    logging: *default-logging
+
 volumes:
   pgdata:
+  open-webui-data:
 
 networks:
   ai-net:
