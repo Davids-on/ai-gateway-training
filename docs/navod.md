@@ -19,8 +19,11 @@
 9. [Bezpečnostní poznámky](#9-bezpečnostní-poznámky)
 10. [Další kroky](#10-další-kroky)
 11. [Odkazy](#11-odkazy)
+12. [Příloha A: Automatická příprava serveru (`prepare.sh`)](#12-příloha-a-automatická-příprava-serveru-preparesh)
 
-Hotové konfigurační soubory jsou v repozitáři v adresáři [`deploy/`](../deploy/). Všechny příkazy použité při přípravě referenčního labu jsou v [`command-log.md`](command-log.md).
+Hotové konfigurační soubory jsou v repozitáři v adresáři [`deploy/`](../deploy/). Komentáře v nich jsou anglicky, ukázky v návodu mají pro přehlednost komentáře česky. Všechny příkazy použité při přípravě referenčního labu jsou v [`command-log.md`](command-log.md).
+
+> **Zkratka pro lektora:** Kroky 1–3 (kapitoly 4–6 až po stažení image) umí provést skript [`deploy/prepare.sh`](../deploy/prepare.sh). Hodí se k přípravě VM před školením, aby se ~9 GB image nestahovalo až na místě. Viz [Příloha A](#12-příloha-a-automatická-příprava-serveru-preparesh).
 
 ---
 
@@ -617,7 +620,7 @@ model_list:
       model: openrouter/nvidia/nemotron-3-ultra-550b-a55b:free   # poskytovatel/ID modelu
       api_key: os.environ/OPENROUTER_API_KEY          # klíč z proměnné prostředí
     model_info:
-      description: "NVIDIA Nemotron 3 Ultra přes OpenRouter (free tier)"
+      description: "NVIDIA Nemotron 3 Ultra via OpenRouter (free tier)"
 
 litellm_settings:
   request_timeout: 600
@@ -650,7 +653,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: litellm
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?chybí v .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?missing in .env}
       POSTGRES_DB: litellm
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -664,12 +667,12 @@ services:
     restart: unless-stopped
     command: ["--config", "/app/config.yaml", "--port", "4000"]
     environment:
-      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?chybí v .env}
-      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:?chybí v .env}
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?missing in .env}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:?missing in .env}
       DATABASE_URL: postgresql://litellm:${POSTGRES_PASSWORD}@postgres:5432/litellm
       UI_USERNAME: ${UI_USERNAME:-admin}
-      UI_PASSWORD: ${UI_PASSWORD:?chybí v .env}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?chybí v .env}
+      UI_PASSWORD: ${UI_PASSWORD:?missing in .env}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?missing in .env}
       LITELLM_MODE: PRODUCTION
     volumes:
       - ./config.yaml:/app/config.yaml:ro
@@ -691,7 +694,7 @@ services:
 | **`healthcheck`** | Docker pravidelně ověřuje, že služba opravdu odpovídá, nejen že běží proces. Stav vidíte v `docker compose ps` (`healthy`). |
 | **`depends_on: condition: service_healthy`** | LiteLLM startuje až ve chvíli, kdy Postgres přijímá spojení. Jinak by při prvním startu spadl na chybě připojení k DB. |
 | **Python v healthchecku** | Image LiteLLM neobsahuje `curl` ani `wget`. Ověřte příkazem `docker run --rm --entrypoint sh <image> -c "which curl wget python3"`. |
-| **`${PROMĚNNÁ:?chybí v .env}`** | Pokud proměnná v `.env` chybí, `docker compose` odmítne start s jasnou chybou. Kontejner nenaběhne s prázdným heslem. |
+| **`${PROMĚNNÁ:?missing in .env}`** | Pokud proměnná v `.env` chybí, `docker compose` odmítne start s jasnou chybou. Kontejner nenaběhne s prázdným heslem. |
 | **Explicitní `environment:` místo `env_file: .env`** | Každý kontejner dostane jen proměnné, které potřebuje. LiteLLM nevidí `WEBUI_SECRET_KEY` a Open WebUI nevidí API klíč OpenRouteru. |
 | **Volume `pgdata`** | Data databáze přežijí `docker compose down`, update image i restart serveru. |
 | **Rotace logů** | Výchozí `json-file` log driver logy neomezuje, na 40GB disku by je časem zaplnil. |
@@ -829,7 +832,7 @@ curl -s -o /dev/null -w "%{http_code} -> %{redirect_url}\n" -X POST http://local
 
 | Příznak | Příčina / řešení |
 |---|---|
-| `required variable LITELLM_MASTER_KEY is missing a value: chybí v .env` | V `.env` chybí proměnná nebo spouštíte `docker compose` z jiného adresáře. `.env` se čte z aktuálního adresáře. |
+| `required variable LITELLM_MASTER_KEY is missing a value: missing in .env` | V `.env` chybí proměnná nebo spouštíte `docker compose` z jiného adresáře. `.env` se čte z aktuálního adresáře. |
 | `open /opt/ai-stack/.env: permission denied` | `.env` patří rootovi. Opravte: `sudo chown $USER: /opt/ai-stack/.env`. |
 | `litellm` zůstává `starting`/`unhealthy`, v logu `Can't reach database server at postgres:5432` | Postgres ještě nenaběhl nebo nesedí heslo. Pozor: **heslo DB se nastavuje jen při prvním startu prázdného volume.** Pokud jste `POSTGRES_PASSWORD` v `.env` změnili až potom, databáze má pořád staré heslo. V labu lze volume smazat (`docker compose down -v`, **smaže data!**). Jinak změňte heslo v DB přes `ALTER USER`. |
 | `500 … Forbidden control character detected in headers. Potential header injection attack.` | V API klíči v `.env` je neviditelný řídicí znak, typicky escape sekvence po stisku šipky při vkládání nebo `\r` z Windows. Zkontrolujte `LC_ALL=C grep -c '[[:cntrl:]]' .env` a délku klíče (73). Opravte řádek a spusťte `docker compose up -d`. |
@@ -894,9 +897,9 @@ Do `docker-compose.yml` přibude služba a volume. Finální soubor je [`deploy/
     restart: unless-stopped
     environment:
       OPENAI_API_BASE_URL: http://litellm:4000/v1
-      OPENAI_API_KEY: ${OPENWEBUI_LITELLM_KEY:?chybí v .env}
+      OPENAI_API_KEY: ${OPENWEBUI_LITELLM_KEY:?missing in .env}
       ENABLE_OLLAMA_API: "False"
-      WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:?chybí v .env}
+      WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:?missing in .env}
       WEBUI_URL: ${WEBUI_URL:-http://localhost:3000}
       DEFAULT_USER_ROLE: pending
     volumes:
@@ -1361,9 +1364,113 @@ Osnova pro navazující části školení:
 | Komponenta | Verze |
 |---|---|
 | Ubuntu Server | 24.04 LTS, jádro 6.8.0-149 |
-| Docker Engine / Compose | 29.9.3 / v5.7.1 |
+| Docker Engine / Compose | 29.9.3 / v5.7.1 (od 16. 11. večer 29.10.0) |
 | LiteLLM | `ghcr.io/berriai/litellm:v1.106.6` |
 | PostgreSQL | `postgres:16.15` |
 | Open WebUI | `ghcr.io/open-webui/open-webui:v0.12.5` |
 | Alpine (zálohy) | `alpine:3.24.3` |
 | Model | `openrouter/nvidia/nemotron-3-ultra-550b-a55b:free` |
+
+---
+
+## 12. Příloha A: Automatická příprava serveru (`prepare.sh`)
+
+**Účel:** Na školení se nechceme dívat, jak se ~9 GB image stahuje přes sdílenou linku. Skript [`deploy/prepare.sh`](../deploy/prepare.sh) proto **předem** provede všechny přípravy z kapitol 4–6 a stáhne image. Samotný stack **nespouští**. To zůstává na účastnících (kap. 6.5 a dál).
+
+| Krok skriptu | Odpovídá kapitole | Poznámka |
+|---|---|---|
+| 0/7 kontrola OS, místa na `/var` (min. 15 GB), RAM, portů 3000/4000 | 3 | malé místo = konec s chybou, obsazený port = varování |
+| 1/7 `apt upgrade`, časové pásmo, nástroje | 4.1–4.3 | upgrade lze vynechat přes `--skip-upgrade` |
+| 2/7 Docker Engine + Compose z `download.docker.com` | 5.1–5.3 | instaluje jen při shodě **fingerprintu GPG klíče** |
+| 3/7 uživatel do skupiny `docker` | 5.4 | projeví se po novém přihlášení |
+| 4/7 `/opt/ai-stack` + `docker-compose.yml`, `config.yaml`, `.env.example` | 6.1, 6.3, 6.4 | odlišný existující soubor nejdřív zazálohuje (`*.bak-<datum>`) |
+| 5/7 `.env` s tajemstvími | 6.1, 6.2, 7.1 | existující hodnoty **nikdy nepřepisuje**; OpenRouter klíč se zeptá skrytě |
+| 6/7 `docker compose config` + `docker compose pull` + `alpine:3.24.3` | 6.5, 7.3, 8.4 | 3 pokusy při výpadku sítě |
+| 7/7 testovací `docker run`, `docker info` | 5.5 | |
+
+**Co skript záměrně nedělá:**
+- nespouští stack (`docker compose up`);
+- nevytváří virtual key pro Open WebUI, protože k tomu musí běžet LiteLLM (kap. 7.1); v `.env` nechá prázdný řádek `OPENWEBUI_LITELLM_KEY=`;
+- nepovyšuje už nainstalovaný Docker (viz níže);
+- nerestartuje server, jen upozorní, pokud je restart potřeba.
+
+### Spuštění
+
+Na server zkopírujte obsah adresáře `deploy/` (např. `git clone` repozitáře nebo `scp`) a jako běžný uživatel se sudo spusťte:
+
+```bash
+cd ~/ai-stack-deploy          # adresář se soubory z deploy/
+chmod +x prepare.sh
+sudo ./prepare.sh             # nebo: sudo ./prepare.sh --skip-upgrade
+```
+
+Pokud skript běží v terminálu, zeptá se na API klíč OpenRouteru:
+```
+  Paste the OpenRouter API key (sk-or-v1-…) and press Enter.
+  The key is not displayed. Empty Enter = fill it in later.
+  OpenRouter API key:
+```
+Klíč se kontroluje stejně jako v kap. 6.1: řídicí znaky (např. ze šipek) znamenají, že se klíč neuloží. Neočekávaný tvar (jiný prefix než `sk-or-v1-` nebo jiná délka než 73 znaků) jen vyvolá varování.
+
+**Očekávaný výstup (zkráceno):**
+```
+==> 0/7 Pre-flight checks
+  [OK] Ubuntu 24.04.5 LTS
+  [OK] Free space on /var: 39 GB
+...
+==> 2/7 Docker Engine and Docker Compose (official repository)
+  [OK] Docker GPG key verified (9DC858229FC7DD38854AE2D88D81803C0EBFCD88)
+  [OK] Docker Client 29.10.0 / Server 29.10.0
+...
+==> 6/7 Validate compose and pull images
+  [OK] docker-compose.yml is valid
+  [OK] All images are available locally:
+postgres:16.15  642MB
+ghcr.io/open-webui/open-webui:v0.12.5  6.45GB
+ghcr.io/berriai/litellm:v1.106.6  1.81GB
+alpine:3.24.3  13MB
+...
+Preparation complete. The stack is NOT running yet. Next steps (guide sections 6.5 and 7):
+```
+
+Skript vypisuje hlášky anglicky (`[OK]`, `[WARN]`, `[ERROR]`), stejně jako ostatní skripty v repu. Varování se na konci zopakují v souhrnu `Warnings:`.
+
+Celý výstup se ukládá do `/var/log/ai-stack-prepare.log` (práva 600). API klíč se do logu nedostane, protože `read -s` ho nevypisuje.
+
+### Ověření
+
+```bash
+docker image ls --format '{{.Repository}}:{{.Tag}}  {{.Size}}'
+ls -l /opt/ai-stack
+cut -d= -f1 /opt/ai-stack/.env | grep -v '^#' | grep .     # jen názvy proměnných
+```
+
+### Pokračování po přípravě
+
+Před prvním `up` ještě chybí virtual key pro Open WebUI. Compose by kvůli prázdné proměnné `OPENWEBUI_LITELLM_KEY` (`${…:?missing in .env}`) odmítl celý soubor, proto pro první start DB a LiteLLM předáme dočasnou hodnotu jen v prostředí příkazu:
+
+```bash
+cd /opt/ai-stack
+OPENWEBUI_LITELLM_KEY=pending docker compose up -d postgres litellm
+```
+
+Pak vytvořte virtual key podle kap. 7.1. Hodnotu ale **vyplňte do existujícího řádku** `OPENWEBUI_LITELLM_KEY=` (`WEBUI_SECRET_KEY` a `WEBUI_URL` už skript vygeneroval, `printf … >> .env` z kap. 7.1 by vytvořil duplicitní řádky). Nakonec spusťte `docker compose up -d`.
+
+> Open WebUI při prvním startu ještě stáhne z Hugging Face embedding model (~90 MB, kap. 7.3). Ten se stahuje až do volume běžícího kontejneru, takže ho skript předem nestáhne.
+
+### Opakované spuštění a server s běžícím stackem
+
+Skript je **idempotentní**. Po přerušení (výpadek sítě při stahování) ho stačí spustit znovu. Na serveru, kde stack už běží, nic nepřepíše ani nerestartuje. Referenční lab: `.env` měl před během i po něm stejný kontrolní součet a kontejnery běžely bez přerušení.
+
+> ⚠️ **Upgrade Dockeru = restart všech kontejnerů.** Při upgradu balíčku `docker-ce` se restartuje démon `dockerd` a s ním všechny kontejnery. Díky `restart: unless-stopped` se samy vrátí, ale LiteLLM a Open WebUI jsou zhruba minutu nedostupné. Přesně to se stalo při prvním testu skriptu v referenčním labu: `apt-get install docker-ce` povýšil 29.9.3 → 29.10.0. Skript proto už nainstalovaný Docker **nepovyšuje**: instaluje s `apt-get install --no-upgrade` a při `apt upgrade` Docker balíčky dočasně podrží (`apt-mark hold`). Docker povyšujte vědomě v servisním okně: `sudo apt-get install --only-upgrade docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin`.
+
+### Troubleshooting
+
+| Příznak | Příčina / řešení |
+|---|---|
+| `Run with sudo` / `Cannot determine the regular user` | Skript potřebuje root, ale zároveň musí znát uživatele, kterému patří `/opt/ai-stack`. Spouštějte `sudo ./prepare.sh` z běžného účtu, ne z `sudo -i`. Případně použijte `--user JMÉNO`. |
+| `Missing …/docker-compose.yml` | `prepare.sh` musí ležet ve stejném adresáři jako soubory z `deploy/`. |
+| `Docker GPG key fingerprint mismatch` | Stažený klíč není klíč Dockeru (proxy, MITM, změna klíče). Neinstalujte, ověřte fingerprint v [oficiální dokumentaci](https://docs.docker.com/engine/install/ubuntu/). |
+| `Attempt 1/3 failed: … compose pull` | Výpadek sítě nebo rate limit registru. Skript to zkusí znovu, případně ho spusťte celý znovu; už stažené vrstvy se nestahují. |
+| `No terminal – set OPENROUTER_API_KEY manually` | Skript běžel bez TTY (např. `ssh server 'sudo ./prepare.sh'`). Klíč doplňte podle kap. 6.1, nebo spusťte `ssh -t`. |
+
