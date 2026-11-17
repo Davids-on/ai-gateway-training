@@ -47,6 +47,9 @@ services:
       # models / PromptGuard guardrail return an authentication error).
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       PROMPTGUARD_API_KEY: ${PROMPTGUARD_API_KEY:-}
+      # Local model server (part 2, module G), e.g. http://<MODEL_SERVER_IP>:11434
+      LOCAL_LLM_API_BASE: ${LOCAL_LLM_API_BASE:-}
+      LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY:-}
       # Do not load a .env inside the container – compose supplies the variables.
       LITELLM_MODE: PRODUCTION
     volumes:

@@ -1,0 +1,27 @@
+# Caddy – API key check in front of Ollama (/opt/local-llm/Caddyfile)
+# Docs: https://caddyserver.com/docs/caddyfile
+#
+# Ollama itself has no authentication. Caddy lets a request through only when
+# it carries "Authorization: Bearer <LOCAL_LLM_API_KEY>"; everything else gets
+# 401. LiteLLM sends exactly this header when the model has "api_key" set.
+#
+# Plain HTTP inside the lab network: the key travels unencrypted between the
+# gateway and this server. For production use TLS (see docs/local-llm-server.md).
+#
+# LOCAL_LLM_API_KEY is passed in by docker-compose.yml from .env.
+
+{
+	# HTTP only, no certificates, no admin API.
+	auto_https off
+	admin off
+}
+
+:11434 {
+	@unauthorized not header Authorization "Bearer {$LOCAL_LLM_API_KEY}"
+	respond @unauthorized `{"error":"unauthorized"}` 401
+
+	reverse_proxy ollama:11434 {
+		# Stream tokens to the gateway immediately, no buffering.
+		flush_interval -1
+	}
+}

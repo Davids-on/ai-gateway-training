@@ -1,0 +1,75 @@
+# Local LLM server: Ollama (CPU) behind Caddy with a static API key
+# Location on the model server: /opt/local-llm/docker-compose.yml
+# Secrets are loaded from /opt/local-llm/.env (template: .env.example).
+#
+#   AI gateway (LiteLLM) --HTTP :11434 + "Authorization: Bearer <key>"--> caddy --> ollama:11434
+#
+# In the training lab this runs on a dedicated VM shared by all participants.
+# In the reference lab it runs next to /opt/ai-stack on the same VM, as a
+# separate compose project (own network, own volumes) – as if it were another VM.
+
+name: local-llm
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  ollama:
+    # Pinned version – never "latest". https://github.com/ollama/ollama/releases
+    image: ollama/ollama:0.40.13
+    restart: unless-stopped
+    environment:
+      # Keep the model in RAM between requests (loading takes seconds to minutes on CPU).
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-24h}
+      # Requests processed at the same time per model. Every slot reserves its
+      # own KV cache (RAM = NUM_PARALLEL x CONTEXT_LENGTH); further requests queue.
+      OLLAMA_NUM_PARALLEL: ${OLLAMA_NUM_PARALLEL:-2}
+      # Requests waiting in the queue before Ollama answers 503 (server busy).
+      OLLAMA_MAX_QUEUE: ${OLLAMA_MAX_QUEUE:-128}
+      # Only one model in memory at a time (CPU server, limited RAM).
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      # Default context window (tokens) for every request without num_ctx.
+      OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-8192}
+      # Disable Ollama's cloud models (":cloud" tags run on ollama.com) –
+      # everything this server answers must be computed locally.
+      OLLAMA_NO_CLOUD: "1"
+    volumes:
+      # Downloaded model weights (GBs) – keep on a fast disk.
+      - ollama-models:/root/.ollama
+    # No "ports:" – Ollama has no authentication of its own, so it is reachable
+    # only through caddy (internal network llm-net).
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks: [llm-net]
+    logging: *default-logging
+
+  caddy:
+    # Same pinned version as in /opt/ai-stack.
+    image: caddy:2.11.7
+    restart: unless-stopped
+    environment:
+      LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY:?missing in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    ports:
+      # The only published port. Restrict it to the gateway VMs (firewall /
+      # network ACL) – see docs/local-llm-server.md.
+      - "11434:11434"
+    depends_on:
+      ollama:
+        condition: service_healthy
+    networks: [llm-net]
+    logging: *default-logging
+
+volumes:
+  ollama-models:
+
+networks:
+  llm-net:

@@ -39,6 +39,31 @@ model_list:
     model_info:
       description: "Claude Haiku 5.5 – Anthropic, fast and cheap"
 
+  # --- Local model (part 2, module G) ---
+  # Ollama on our own model server (CPU), behind Caddy with a static API key.
+  # The alias "qwen-local" hides the concrete model and size – the model
+  # server can switch to another model without touching any client.
+  - model_name: qwen-local
+    litellm_params:
+      # prefix "ollama_chat/" = Ollama native /api/chat (tools, streaming, think)
+      # qwen3:4b-instruct = Qwen3 4B Instruct 2507: no "thinking" phase, and the
+      # qwen3 architecture serves several requests in parallel (qwen3.5 does not).
+      model: ollama_chat/qwen3:4b-instruct
+      api_base: os.environ/LOCAL_LLM_API_BASE
+      # sent as "Authorization: Bearer <key>" – checked by Caddy on the model server
+      api_key: os.environ/LOCAL_LLM_API_KEY
+      # Never let the model "think" first: on CPU that is hundreds of extra
+      # tokens (minutes). Needed for hybrid models such as qwen3.5 / qwen3:4b,
+      # harmless for instruct models.
+      think: false
+      # CPU inference is slow – allow long answers, but not forever.
+      timeout: 300
+    model_info:
+      description: "Qwen3 4B – local model on our own server (no data leaves the company)"
+      # Our own hardware: zero token cost in spend tracking.
+      input_cost_per_token: 0
+      output_cost_per_token: 0
+
 litellm_settings:
   # Maximum time to wait for the provider's response (s). The default is very high.
   request_timeout: 600

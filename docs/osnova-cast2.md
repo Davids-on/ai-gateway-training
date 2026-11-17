@@ -53,7 +53,16 @@ Každý krok v návodu: co a proč, příkaz, očekávaný výstup, ověření, 
 - *(Cursor vyřazen – volá gateway ze svých cloudových serverů, lab není dostupný z internetu)*
 - **Lab:** každý účastník dostane vlastní virtual key a připojí klienty; útrata per klíč v LiteLLM
 
-*(Modul G – observabilita – ze školení vyřazen.)*
+## Modul G: Lokální model přes AI gateway
+- sdílený model server (lektor): Ollama + Qwen3 4B Instruct na CPU, Caddy s API klíčem (`docs/model-server.md`)
+- LiteLLM: `ollama_chat/`, `api_base`, `api_key`, `think: false`, nulová cena, alias `qwen-local`
+- guardrails a fallbacky u lokálního modelu (kam smí data odejít)
+- Open WebUI: virtual key, viditelnost, vypnutí Builtin Tools (jinak ~7 000 tokenů promptu na zprávu), úlohy na pozadí
+- srovnání cloud vs. lokální model (rychlost, kvalita, cena, data)
+- **Lab:** připojit `qwen-local`, chat přes `curl` i Open WebUI, ověřit spend 0 a guardrail
+- **Příloha A:** zprovoznění lokálního modelu (Ollama: notebook, Docker CPU, GPU) a HW požadavky
+
+*(Původní modul G – observabilita – ze školení vyřazen; písmeno G nyní patří lokálnímu modelu.)*
 
 ## Ověřené předpoklady (listopad 2026)
 - LiteLLM v1.106.6 obsahuje guardrail hooky `promptguard` i `litellm_content_filter` (ověřeno v kontejneru)

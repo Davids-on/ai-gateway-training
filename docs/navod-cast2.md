@@ -1,6 +1,6 @@
 # AI gateway v labu – Část 2: Používání a správa
 
-Školicí návod, navazuje na [Část 1](navod.md) (instalace LiteLLM + Open WebUI v Dockeru). V této části bránu používáme a spravujeme: přidáváme modely, řídíme přístup a útratu, nasazujeme guardrails a připojujeme klienty (API, Claude Code, Claude Desktop, Codex CLI).
+Školicí návod, navazuje na [Část 1](navod.md) (instalace LiteLLM + Open WebUI v Dockeru). V této části bránu používáme a spravujeme: přidáváme modely, řídíme přístup a útratu, nasazujeme guardrails, připojujeme klienty (API, Claude Code, Claude Desktop, Codex CLI) a nakonec za gateway zapojíme i lokální model na vlastním serveru.
 
 > **Konvence (stejné jako v části 1):**
 > - Příkazy se spouštějí na serveru jako běžný uživatel se sudo, v adresáři `/opt/ai-stack`.
@@ -17,6 +17,8 @@
 6. [Modul E: Guardrails](#6-modul-e-guardrails)
 7. [Modul F0: HTTPS pro gateway (Caddy)](#7-modul-f0-https-pro-gateway-caddy)
 8. [Modul F: Integrace klientů](#8-modul-f-integrace-klientů)
+9. [Modul G: Lokální model přes AI gateway](#9-modul-g-lokální-model-přes-ai-gateway)
+10. [Příloha A: Lokální AI model – zprovoznění a HW požadavky](#10-příloha-a-lokální-ai-model--zprovoznění-a-hw-požadavky)
 
 Konfigurační soubory jsou v [`deploy/`](../deploy/), příkazy referenčního labu v [`command-log.md`](command-log.md).
 
@@ -1662,3 +1664,379 @@ curl -s "http://localhost:4000/user/info?user_id=jan.novak" -H "Authorization: B
 | Claude Desktop: `Gateway was unreachable` | špatná URL, HTTP místo HTTPS nebo nedostupná síť | `curl $GW/health/liveliness` ze stejného počítače |
 | Claude Desktop nenabízí žádné modely | `/v1/models` vrací ID, která Desktop nepozná jako Claude | modely pojmenovat skutečnými Claude ID (kap. 4.2), nebo je vyjmenovat v `inferenceModels` |
 | `400 Content blocked: …` uprostřed práce agenta | guardrail `secrets-block` našel v kontextu např. API klíč ze souboru `.env` | záměr. Agentovi neukazujte soubory s tajemstvími (permissions/ignore), případně upravte pravidlo |
+
+---
+
+## 9. Modul G: Lokální model přes AI gateway
+
+**Co a proč:** Všechny dosavadní modely běží v cloudu: prompty odcházejí k OpenRouteru nebo Anthropicu. Pro některá data to není přijatelné (osobní údaje, interní dokumenty, regulace) a za každý token se platí. Řešením je **lokální model** na vlastním hardwaru. Do gateway ho připojíme jako další model vedle cloudových. Klienti tak dál používají jednu adresu, jeden klíč a jedno API a jen si vyberou model. Gateway nad ním stejně jako u ostatních modelů řeší klíče, limity, guardrails i spend log.
+
+```
+Open WebUI / klienti ──▶ LiteLLM ──┬──▶ OpenRouter, Anthropic        (cloud)
+                                   └──▶ model server :11434            (vlastní VM)
+                                         Caddy (API klíč) ──▶ Ollama ──▶ qwen3:4b-instruct
+```
+
+**Model server** je samostatná VM, kterou připravil lektor a kterou **sdílejí všichni účastníci** (příprava: [`model-server.md`](model-server.md)). Běží na ní [Ollama](https://ollama.com) s modelem **Qwen3 4B Instruct** jen na CPU, bez GPU. Před Ollamou stojí Caddy, který pustí dál jen requesty se sdíleným API klíčem. Jak lokální model zprovoznit a jaký hardware potřebuje, popisuje [Příloha A](#10-příloha-a-lokální-ai-model--zprovoznění-a-hw-požadavky).
+
+> **Realistická očekávání:** Malý model na CPU je **pomalý** (jednotky tokenů za sekundu, odpověď na odstavec trvá desítky sekund) a **méně schopný** než cloudové modely: občas odpoví nepřesně nebo vloží slovo z jiného jazyka. Na sdíleném serveru se navíc requesty všech účastníků dělí o stejná CPU. Smyslem modulu je princip a integrace, ne výkon.
+
+**Od lektora dostanete:**
+
+| Hodnota | Příklad (referenční lab) |
+|---|---|
+| adresa model serveru | `http://192.0.2.10:11434` |
+| sdílený API klíč | `<LOCAL_LLM_API_KEY>` (začíná `sk-local-`) |
+| název modelu | `qwen3:4b-instruct` |
+
+### 9.1 Ověření dostupnosti model serveru
+
+**Co a proč:** Než sáhneme do LiteLLM, ověříme z VM účastníka, že je model server dostupný a klíč platí. Když pak něco nepůjde, budeme vědět, že chyba je v konfiguraci gateway, ne v síti.
+
+Uložte adresu a klíč do `.env` stejně jako ostatní tajemství (klíč se nezobrazí ani neuloží do historie):
+```bash
+cd /opt/ai-stack
+echo "LOCAL_LLM_API_BASE=http://<IP_MODEL_SERVERU>:11434" >> .env
+read -rsp "LOCAL_LLM_API_KEY: " k; echo; echo "LOCAL_LLM_API_KEY=$k" >> .env; unset k
+awk -F= '/^LOCAL_LLM/{print $1, length($2), substr($2,1,9)}' .env
+```
+```
+LOCAL_LLM_API_BASE 22 http://10
+LOCAL_LLM_API_KEY 57 sk-local-
+```
+`LOCAL_LLM_API_BASE` je **bez** `/v1`: LiteLLM si u Ollamy cestu `/api/chat` doplní sám.
+
+Test přímo proti model serveru, nejdřív bez klíče, pak s ním:
+```bash
+set -a; . ./.env; set +a
+curl -s -o /dev/null -w "%{http_code}\n" $LOCAL_LLM_API_BASE/api/tags
+curl -s $LOCAL_LLM_API_BASE/api/tags -H "Authorization: Bearer $LOCAL_LLM_API_KEY" | jq -r '.models[].name'
+```
+```
+401
+qwen3:4b-instruct
+```
+`401` bez klíče je správně: Ollama sama žádnou autentizaci nemá, chrání ji Caddy na model serveru.
+
+### 9.2 Předání proměnných do kontejneru: `docker-compose.yml`
+
+Stejně jako u Anthropic klíče (kap. 4.4) musí compose proměnné předat do kontejneru `litellm`:
+```yaml
+  litellm:
+    environment:
+      # ... beze změny ...
+      PROMPTGUARD_API_KEY: ${PROMPTGUARD_API_KEY:-}
+      # Local model server (part 2, module G), e.g. http://<MODEL_SERVER_IP>:11434
+      LOCAL_LLM_API_BASE: ${LOCAL_LLM_API_BASE:-}
+      LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY:-}
+```
+
+### 9.3 Model v `config.yaml`
+
+Do `model_list` přidáme lokální model (celý soubor v [`deploy/config.yaml`](../deploy/config.yaml)):
+```yaml
+  # --- Local model (part 2, module G) ---
+  - model_name: qwen-local
+    litellm_params:
+      model: ollama_chat/qwen3:4b-instruct
+      api_base: os.environ/LOCAL_LLM_API_BASE
+      api_key: os.environ/LOCAL_LLM_API_KEY
+      think: false
+      timeout: 300
+    model_info:
+      description: "Qwen3 4B – local model on our own server (no data leaves the company)"
+      input_cost_per_token: 0
+      output_cost_per_token: 0
+```
+
+| Řádek | Význam |
+|---|---|
+| `model_name: qwen-local` | alias pro klienty. Neobsahuje velikost ani verzi, takže lektor může na model serveru nasadit jiný model a klienti nic nemění (kap. 4.2) |
+| `ollama_chat/` | adaptér pro nativní API Ollamy (`/api/chat`): streaming, tool calling, `think`. Alternativa `openai/` + `api_base: …/v1` by šla také (Ollama má i OpenAI-kompatibilní API), ale `ollama_chat/` zná specifika Ollamy |
+| `api_key` | LiteLLM ho pošle jako `Authorization: Bearer …`, přesně to kontroluje Caddy na model serveru |
+| `think: false` | některé modely (Qwen3 hybridní, Qwen 3.5) před odpovědí „přemýšlejí“ a na CPU to znamená stovky tokenů navíc. V referenčním labu trvala jednovětá odpověď **73 s s thinkingem a 2,5 s bez něj**. U zvoleného instruct modelu nic nemění, chrání ale před výměnou modelu za „přemýšlivý“ |
+| `timeout: 300` | CPU inference je pomalá, delší odpověď se zdrží minutu i víc |
+| `input/output_cost_per_token: 0` | vlastní hardware, spend log ukáže 0 (tokeny se ale počítají dál, takže víme, kolik se model používá) |
+
+### 9.4 Nasazení a ověření
+
+```bash
+cd /opt/ai-stack
+ts=$(date +%Y%m%d-%H%M%S)
+cp -p config.yaml config.yaml.bak-$ts; cp -p docker-compose.yml docker-compose.yml.bak-$ts
+cp ~/ai-stack-deploy/config.yaml ~/ai-stack-deploy/docker-compose.yml ~/ai-stack-deploy/.env.example .
+docker compose config -q && echo COMPOSE_OK
+docker compose up -d litellm      # nové proměnné prostředí → compose kontejner znovu vytvoří
+docker compose ps litellm --format '{{.Service}} {{.Status}}'
+```
+```
+COMPOSE_OK
+ Container ai-stack-litellm-1 Started
+litellm Up 45 seconds (healthy)
+```
+
+**a) Model je v seznamu a zdravý:**
+```bash
+set -a; . ./.env; set +a
+curl -s http://localhost:4000/v1/models -H "Authorization: Bearer $LITELLM_MASTER_KEY" | jq -c '[.data[].id]'
+curl -s "http://localhost:4000/health?model=qwen-local" -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+  | jq -c '{healthy_count, unhealthy_count}'
+```
+```
+["nemotron-3-ultra","claude-opus-5-5","claude-sonnet-5-5","claude-haiku-5-5","qwen-local"]
+{"healthy_count":1,"unhealthy_count":0}
+```
+`/health` posílá na model skutečný (krátký) request, ověří tedy celou cestu včetně klíče.
+
+**b) Chat přes gateway:**
+```bash
+time curl -s http://localhost:4000/v1/chat/completions \
+  -H "Authorization: Bearer $LITELLM_MASTER_KEY" -H "Content-Type: application/json" \
+  -d '{"model":"qwen-local","messages":[{"role":"user","content":"Vyjmenuj tři výhody lokálního AI modelu oproti cloudu. Stručně, v bodech."}]}' \
+  | jq -r '.choices[0].message.content, (.usage|tostring)'
+```
+```
+1. **Větší ochrana dat** – Lokální model nevyžaduje odesílání osobních nebo citlivých dat do cloudu, …
+2. **Nižší závislost na internetu** – Funkce mohou běžet i při neaktivním internetu, …
+3. **Rychlejší reakce a nižší zpoždění** – Výpočty probíhají přímo na zařízení, …
+{"completion_tokens":203,"prompt_tokens":44,"total_tokens":247}
+
+real    0m54.413s
+```
+Pro srovnání pošlete stejný dotaz na `claude-haiku-5-5`: odpověď přijde za pár sekund. Všimněte si i obsahu: bod 3 („rychlejší reakce“) je u CPU serveru spíš opak pravdy. Malý model píše přesvědčivě, i když se mýlí.
+
+**c) Streaming** (Open WebUI a většina klientů ho používá, tokeny chodí průběžně):
+```bash
+curl -sN http://localhost:4000/v1/chat/completions \
+  -H "Authorization: Bearer $LITELLM_MASTER_KEY" -H "Content-Type: application/json" \
+  -d '{"model":"qwen-local","stream":true,"messages":[{"role":"user","content":"Řekni ahoj."}]}' | head -3
+```
+```
+data: {"id":"…","object":"chat.completion.chunk","model":"qwen-local","choices":[{"index":0,"delta":{"role":"assistant","content":"A"}}]}
+
+data: {"id":"…","object":"chat.completion.chunk","model":"qwen-local","choices":[{"index":0,"delta":{"content":"ho"}}]}
+```
+
+**d) Spend log:** tokeny se počítají, cena je nulová:
+```bash
+docker compose exec -T postgres psql -U litellm -tAc \
+  "select model_group, model, count(*), sum(total_tokens), sum(spend) from \"LiteLLM_SpendLogs\" where model_group='qwen-local' group by 1,2"
+```
+```
+qwen-local|ollama_chat/qwen3:4b-instruct|5|1615|0
+```
+Sloupec `model` ukazuje skutečný model za aliasem. Kdyby lektor model na serveru vyměnil, uvidíte tu dva řádky se stejným `model_group`.
+
+**e) Guardrails platí i pro lokální model.** Guardrail `secrets-block` z modulu E je `default_on`, proto blokuje i request na `qwen-local`:
+```bash
+curl -s http://localhost:4000/v1/chat/completions \
+  -H "Authorization: Bearer $LITELLM_MASTER_KEY" -H "Content-Type: application/json" \
+  -d '{"model":"qwen-local","messages":[{"role":"user","content":"Dokument PŘÍSNĚ TAJNÉ: shrň ho"}]}' | jq -r .error.message
+```
+```
+Content blocked: keyword 'přísně tajné' detected (Document classification label – must not be sent to an external AI)
+```
+
+> **K diskusi:** Pravidlo říká „nesmí do *externí* AI“, ale lokální model externí není. Je správně, že blokuje i jeho? Možnosti: guardrail ponechat globální (jednoduché, bezpečné), nebo `default_on: false` a zapínat ho per klíč/tým jen pro cloudové modely, případně oddělit cloudové a lokální modely do různých týmů s různými guardraily. Stejná úvaha platí pro **fallbacky**: fallback `qwen-local → claude-haiku-5-5` by při výpadku model serveru tiše poslal citlivá data do cloudu. Opačný směr (cloud → lokální model) je v pořádku.
+
+### 9.5 Lokální model v Open WebUI
+
+**1. Povolit model na virtual key Open WebUI** (stejně jako v kap. 4.8):
+```bash
+jq -n --arg k "$OPENWEBUI_LITELLM_KEY" \
+  '{key: $k, models: ["nemotron-3-ultra","claude-opus-5-5","claude-sonnet-5-5","claude-haiku-5-5","qwen-local"]}' \
+  | curl -s http://localhost:4000/key/update \
+      -H "Authorization: Bearer $LITELLM_MASTER_KEY" -H "Content-Type: application/json" -d @- \
+  | jq -c '{key_alias, models}'
+```
+```
+{"key_alias":"open-webui","models":["nemotron-3-ultra","claude-opus-5-5","claude-sonnet-5-5","claude-haiku-5-5","qwen-local"]}
+```
+
+**2. Nastavit model v Open WebUI** (jako admin): *Admin Panel → Settings → Models → `qwen-local`* (tužka):
+- **Description:** `Lokální model Qwen na vlastním serveru – data neopouštějí firmu, pomalejší` (nebo vlastní text; uživatelé ho vidí pod názvem modelu),
+- **Access** (vpravo nahoře) → **Public** (nebo skupina, modul B),
+- **Capabilities → Builtin Tools → vypnout.** To je nejdůležitější krok, viz níže.
+- **Save & Update**. Pak zkontrolujte v seznamu modelů, že u `qwen-local` svítí *Public*. V referenčním labu se jednou první kliknutí na *Save & Update* neuložilo.
+
+[SCREENSHOT: Admin → Settings → Models → qwen-local, Capabilities s vypnutým Builtin Tools]
+
+**Proč vypnout Builtin Tools:** Open WebUI 0.12 posílá s každou zprávou definice svých **vestavěných nástrojů** (čas, paměť, poznámky, znalostní báze, kalendář, automatizace…): v referenčním labu **37 nástrojů, 27 KB JSON, přes 7 000 tokenů**. Cloudový model takový prompt zpracuje za sekundu. CPU server zpracovává prompt rychlostí ~12–25 tokenů/s, takže **každá zpráva trvala 4–5 minut**, než model vůbec začal odpovídat. Po vypnutí má request ~40 tokenů a odpověď začne téct během pár sekund. Malý model by navíc s 37 nástroji stejně nepracoval spolehlivě.
+
+> Zjištěno při ladění referenčního labu: chat v Open WebUI „visel“ bez odpovědi, kdežto `curl` přes gateway odpověděl za 11 s. Rozdíl odhalilo až zalogování těla requestu na model serveru (`OLLAMA_DEBUG_LOG_REQUESTS=true`): klíč `tools` s 37 položkami. Obecné poučení: když se klient chová jinak než `curl`, porovnejte, **co klient skutečně posílá**.
+
+**3. Test:** nový chat → model `qwen-local` → např. *„Napiš krátký e-mail kolegům, že zítra od 9 do 10 bude odstávka VPN.“* Odpověď začne přicházet po několika sekundách, pod ní se objeví upozornění z filtru gateway (modul E) a návrhy follow-up otázek.
+
+**4. Úlohy na pozadí:** Open WebUI po každé odpovědi volá model ještě několikrát: **název chatu, tagy, návrhy follow-up otázek** (každé volání má stovky tokenů promptu). U cloudového modelu to nevadí, na sdíleném CPU serveru to ale **zabírá stejná CPU** a další dotazy čekají ve frontě. V *Admin Panel → Settings → Interface* lze:
+- generování titulků, tagů a follow-up návrhů vypnout, nebo
+- nastavit *Task Model* (model pro tyto úlohy) na jiný model.
+
+Pozor: když nastavíte jako task model **cloudový** model, odejde do cloudu i obsah chatů s lokálním modelem (název chatu se generuje z prvních zpráv). Pro citlivá data proto úlohy na pozadí raději vypněte. V referenčním labu jsme nastavení ponechali výchozí.
+
+### 9.6 Srovnání: cloud vs. lokální model
+
+| | Cloud (Claude Haiku 5.5) | Lokální (Qwen3 4B, CPU) |
+|---|---|---|
+| Kam jdou data | k poskytovateli (smlouva, DPA, region) | nikam, zůstávají na vlastní VM |
+| Cena | za token | 0 za token, platí se HW a provoz |
+| Odpověď ~200 tokenů | jednotky sekund | ~55 s (ref. lab, 2 vCPU) |
+| Kvalita, čeština | vysoká | použitelná na jednoduché úlohy, občas chyby |
+| Kontext | stovky tisíc tokenů | technicky 256K, prakticky jednotky tisíc (rychlost, RAM) |
+| Souběžní uživatelé | prakticky neomezeně | podle počtu slotů a CPU, další čekají |
+| Provoz | poskytovatel | my: patche, monitoring, kapacita |
+| Vhodné pro | obecná práce, agenti, dlouhé dokumenty | citlivá data, offline prostředí, klasifikace, extrakce, krátké texty |
+
+S GPU se poměr rychlosti dramaticky mění (viz Příloha A). Kvalita ale zůstává omezená velikostí modelu.
+
+### Troubleshooting
+
+| Příznak | Příčina | Řešení |
+|---|---|---|
+| `401` z `/health?model=qwen-local`, v logu LiteLLM `unauthorized` | prázdný nebo špatný `LOCAL_LLM_API_KEY` v kontejneru | `docker compose exec litellm sh -c 'echo ${#LOCAL_LLM_API_KEY}'` musí být > 0; po opravě `.env` spustit `docker compose up -d litellm` (restart nestačí) |
+| `Connection refused` / timeout | model server nedostupný, špatná IP, firewall | `curl -s -o /dev/null -w "%{http_code}" $LOCAL_LLM_API_BASE/api/tags` z VM (čekáme `401`) |
+| `model 'qwen3:4b-instruct' not found` | na model serveru je jiný model | `…/api/tags` s klíčem ukáže, co tam je; upravit `model:` v `config.yaml` |
+| odpověď přes `curl` trvá minutu i na „ahoj“ | model „přemýšlí“ | `think: false` v `litellm_params` |
+| chat v Open WebUI minuty nic nezobrazí | vestavěné nástroje Open WebUI (~7 000 tokenů promptu) | *Capabilities → Builtin Tools* vypnout (kap. 9.5) |
+| některé odpovědi trvají mnohem déle než jiné | fronta na sdíleném serveru (ostatní účastníci, úlohy Open WebUI na pozadí) | normální; v Open WebUI vypnout úlohy na pozadí (kap. 9.5) |
+| `Timeout` po 300 s | velmi dlouhá odpověď nebo plná fronta | kratší dotazy, `max_tokens`; lektor zkontroluje zatížení serveru |
+| `400 Content blocked` | guardrail `secrets-block` (`default_on`) | záměr, viz diskuse v kap. 9.4 |
+| `key not allowed to access model` | `qwen-local` chybí na virtual key | `/key/update` (kap. 9.5) |
+
+---
+
+## 10. Příloha A: Lokální AI model – zprovoznění a HW požadavky
+
+Obecný návod, jak rozjet lokální jazykový model (LLM) a jaký hardware na to potřebujete. Jak připravit sdílený a zabezpečený model server pro školení, popisuje [`model-server.md`](model-server.md).
+
+### 10.1 Pojmy
+
+| Pojem | Význam |
+|---|---|
+| **Parametry** (např. 4B, 8B, 70B) | počet vah modelu v miliardách. Víc parametrů = lepší kvalita, ale víc paměti a pomalejší odpověď |
+| **Kvantizace** (FP16, Q8, Q4) | kolik bitů má jedna váha. FP16 = 16 bitů (originál), Q8 ≈ 8 bitů, **Q4 ≈ 4–5 bitů** (běžný kompromis, ztráta kvality malá). Ollama stahuje ve výchozím stavu Q4 (`Q4_K_M`) |
+| **GGUF** | formát souboru s kvantizovaným modelem, používají ho llama.cpp a Ollama |
+| **Kontext** | kolik tokenů (prompt + historie + odpověď) model najednou „vidí“ |
+| **KV cache** | paměť, kterou model potřebuje na kontext. Roste s délkou kontextu a s počtem souběžných requestů |
+| **Prompt processing** | zpracování vstupu. Na GPU tisíce tokenů/s, na CPU desítky až stovky |
+| **Generování** (tokeny/s) | rychlost psaní odpovědi. Pro plynulé čtení stačí ~10 tokenů/s |
+| **Dense vs. MoE** | *dense* model počítá se všemi parametry; *Mixture of Experts* (např. `qwen3:30b-a3b`: 30B celkem, 3B aktivních) potřebuje paměť na celý model, ale počítá jen s částí, takže je rychlý i na CPU |
+| **Instruct vs. thinking** | *instruct* model odpovídá rovnou; *thinking* (reasoning) model nejdřív „přemýšlí“. Je přesnější, ale generuje mnohem víc tokenů |
+
+### 10.2 Kolik paměti model potřebuje
+
+Orientační pravidlo pro Q4:
+```
+paměť ≈ parametry (v miliardách) × 0,6 GB  +  KV cache (~0,5–2 GB na 8K kontextu a souběžný request)  +  ~1 GB režie
+```
+Model musí celý (včetně KV cache) být v **RAM** (CPU) nebo ve **VRAM** (GPU). Když se do VRAM nevejde, Ollama část vrstev nechá na CPU a rychlost výrazně klesne.
+
+Rychlost generování omezuje hlavně **propustnost paměti**, ne počet jader. Proto je GPU (stovky GB/s až TB/s) řádově rychlejší než CPU se serverovou DDR4/DDR5, a proto i Apple Silicon (sdílená rychlá paměť) zvládá modely, které by na běžném PC běžely jen na GPU.
+
+### 10.3 HW požadavky
+
+**Základní model pro začátek: `qwen3:4b-instruct`** (Qwen3 4B Instruct 2507, licence Apache 2.0, 2,5 GB, rozumná čeština):
+
+| | Minimum | Doporučeno |
+|---|---|---|
+| CPU | 4 jádra x86-64 s **AVX2** (nebo Apple Silicon) | 8+ jader, AVX-512 |
+| RAM | 8 GB | 16 GB (víc souběžných requestů, delší kontext) |
+| Disk | 10 GB volných, SSD | 20+ GB SSD (víc modelů) |
+| GPU | není potřeba | NVIDIA s 6+ GB VRAM, zrychlí řádově |
+| Očekávaná rychlost | ~4–5 tokenů/s (2 vCPU, ověřeno v labu) | CPU 8 vCPU ~10 tokenů/s (odhad); GPU 100+ tokenů/s |
+
+**Orientační přehled dalších velikostí** (Q4, odhady; ověřte na svém HW):
+
+| Třída modelu | Příklady (Ollama) | Paměť pro model | Rozumný HW | Typické použití |
+|---|---|---|---|---|
+| malý (1–4B) | `qwen3:1.7b`, `qwen3:4b-instruct` | 1,5–3 GB | CPU 4–8 jader / 8–16 GB RAM | demo, klasifikace, extrakce, jednoduché texty |
+| střední (7–9B) | `qwen3:8b` | 5–6 GB | GPU 8–12 GB VRAM; na CPU použitelné, ale pomalé (2–5 tok/s) | asistent pro běžné dotazy, sumarizace |
+| MoE ~30B | `qwen3:30b-a3b` | 18–20 GB | 32 GB RAM (CPU rozumně rychlé díky 3B aktivním), nebo GPU 24 GB | lepší kvalita při rozumné rychlosti |
+| velký (14–32B) | `qwen3:14b`, `qwen3:32b` | 9–20 GB | GPU 16–24 GB VRAM | kvalitní asistent, jednodušší kód |
+| velmi velký (70B+, velká MoE) | `qwen3:235b-a22b` | 40–140 GB | více GPU (2× 48–80 GB), nebo Mac s 128+ GB | blíží se cloudovým modelům |
+
+Pro **více souběžných uživatelů** (desítky a víc) je na GPU vhodnější **vLLM** než Ollama: dávkuje requesty a má výrazně vyšší celkovou propustnost.
+
+### 10.4 Zprovoznění s Ollamou
+
+**Varianta 1: vlastní počítač (macOS, Windows, Linux)**
+
+Nainstalujte Ollamu z <https://ollama.com/download> (na Macu využije GPU Apple Silicon automaticky). Pak v terminálu:
+```bash
+ollama pull qwen3:4b-instruct
+ollama run qwen3:4b-instruct "Jaké je hlavní město Česka? Odpověz jednou větou."
+```
+Ollama poslouchá na `http://127.0.0.1:11434`, tedy jen lokálně a bez autentizace.
+
+**Varianta 2: Linux server v Dockeru (CPU)**
+
+```bash
+docker run -d --name ollama --restart unless-stopped \
+  -v ollama:/root/.ollama \
+  -p 127.0.0.1:11434:11434 \
+  ollama/ollama:0.40.13
+docker exec ollama ollama pull qwen3:4b-instruct
+```
+`-p 127.0.0.1:…` publikuje port **jen na localhost**. Ollama nemá autentizaci, proto ji nikdy nevystavujte do sítě bez ochrany (API klíč přes reverse proxy jako v [`model-server.md`](model-server.md), firewall).
+
+**Varianta 3: Linux server s NVIDIA GPU**
+
+Na hostitele nainstalujte ovladač NVIDIA a [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html), pak ke spuštění přidejte `--gpus=all`:
+```bash
+docker run -d --name ollama --gpus=all -v ollama:/root/.ollama -p 127.0.0.1:11434:11434 ollama/ollama:0.40.13
+docker logs ollama 2>&1 | grep "inference compute"    # library=cuda, název GPU a VRAM
+```
+*(V referenčním labu bez GPU neověřeno, podle [dokumentace Ollamy](https://docs.ollama.com/docker).)*
+
+### 10.5 Ověření a API
+
+Nativní API Ollamy (`/api/chat`). Statistiky v odpovědi ukazují rychlost:
+```bash
+curl -s http://127.0.0.1:11434/api/chat -d '{
+  "model": "qwen3:4b-instruct", "stream": false,
+  "messages": [{"role": "user", "content": "Jaké je hlavní město Česka? Odpověz jednou větou."}]
+}' | jq -c '{c: .message.content, tok_s: (.eval_count/(.eval_duration/1e9)*10|round/10)}'
+```
+```
+{"c":"Hlavním městem Česka je Praha.","tok_s":4.5}
+```
+
+OpenAI-kompatibilní API (`/v1`), se kterým umí pracovat většina knihoven i klientů:
+```bash
+curl -s http://127.0.0.1:11434/v1/chat/completions -H "Content-Type: application/json" -d '{
+  "model": "qwen3:4b-instruct",
+  "messages": [{"role": "user", "content": "Odpověz jedním slovem: hlavní město Česka?"}]
+}' | jq -c '{content: .choices[0].message.content, usage}'
+```
+```
+{"content":"Prag","usage":{"prompt_tokens":31,"completion_tokens":3,"total_tokens":34}}
+```
+(Skutečná odpověď z referenčního labu: malý model občas sklouzne do jiného jazyka.)
+
+Užitečné příkazy:
+```bash
+ollama list                    # stažené modely
+ollama ps                      # modely v paměti, CPU/GPU, kontext
+ollama show qwen3:4b-instruct  # architektura, parametry, kvantizace, schopnosti (tools, thinking)
+ollama rm <model>              # smazat model z disku
+```
+
+### 10.6 Jak vybrat model
+
+- **Licence:** pro firemní použití hledejte permisivní licence (Apache 2.0, MIT). Některé modely mají omezení (počet uživatelů, zákaz určitého použití).
+- **Jazyk:** čeština není u malých modelů samozřejmost. Vyzkoušejte na vlastních úlohách. Qwen, Gemma a Mistral zvládají češtinu lépe než většina malých modelů.
+- **Instruct vs. thinking:** pro CPU a interaktivní použití instruct, thinking jen tam, kde rozhoduje přesnost a čas nevadí.
+- **Schopnosti:** `ollama show` ukáže, zda model umí *tools* (function calling, potřeba pro agenty), *vision* (obrázky), *thinking*.
+- **Paralelní zpracování:** ne každá architektura ho v Ollamě podporuje (v 0.40.13 např. Qwen 3.5 ne). Pro sdílený server ověřte `n_slots` v logu ([`model-server.md`](model-server.md), kap. 4.5).
+- **Zdroj:** modely stahujte z oficiální knihovny Ollamy nebo od ověřených autorů na Hugging Face. Soubor modelu je velký binární blob, jehož obsah nelze snadno zkontrolovat.
+
+### 10.7 Odkazy
+
+| Téma | Odkaz |
+|---|---|
+| Ollama – stažení | <https://ollama.com/download> |
+| Ollama – dokumentace (Docker, FAQ, API) | <https://docs.ollama.com> |
+| Ollama – knihovna modelů | <https://ollama.com/library> |
+| Qwen3 v Ollamě | <https://ollama.com/library/qwen3> |
+| NVIDIA Container Toolkit | <https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html> |
+| LiteLLM – Ollama provider | <https://docs.litellm.ai/docs/providers/ollama> |
+| vLLM (inference server pro GPU) | <https://docs.vllm.ai> |

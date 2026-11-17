@@ -13,18 +13,19 @@ prohlížeč ──HTTPS :443──▶ Caddy ──▶ Open WebUI ──┐
 klienti   ──HTTPS :8443─▶ Caddy ──▶ LiteLLM ◀────┘ (virtual key)
 (curl, SDK, Claude Code,             │   └──▶ PostgreSQL (klíče, spend, logy)
  Codex CLI, Claude Desktop)          ├──▶ OpenRouter → Nemotron 3 Ultra (free)
-                                     └──▶ Anthropic  → Claude Opus / Sonnet / Haiku 5.5
+                                     ├──▶ Anthropic  → Claude Opus / Sonnet / Haiku 5.5
+                                     └──▶ model server (sdílená VM) → Ollama → Qwen3 4B (lokálně)
 ```
 
 Na konci školení má každý účastník:
 - běžící stack v Dockeru (`/opt/ai-stack`), zálohovaný a s postupem pro update,
-- čtyři modely za jednotnými aliasy, s fallbackem mezi poskytovateli,
+- čtyři cloudové modely za jednotnými aliasy, s fallbackem mezi poskytovateli, a jeden lokální model na vlastním serveru,
 - týmy, virtual keys s budgety a rate limity, přehled útraty,
 - guardrails (blokace tajemství, maskování PII, detekce prompt injection),
 - HTTPS přes Caddy s vlastní CA,
 - připojené klienty: API (OpenAI i Anthropic formát), Claude Code, Codex CLI, Claude Desktop.
 
-**Verze v referenčním labu (listopad 2026):** LiteLLM `v1.106.6`, Open WebUI `v0.12.5`, PostgreSQL `16.15`, Caddy `2.11.7`, Alpine `3.24.3` (zálohy), Docker 29.10 / Compose v5.7.
+**Verze v referenčním labu (listopad 2026):** LiteLLM `v1.106.6`, Open WebUI `v0.12.5`, PostgreSQL `16.15`, Caddy `2.11.7`, Alpine `3.24.3` (zálohy), Ollama `0.40.13` + `qwen3:4b-instruct` (model server), Docker 29.10 / Compose v5.7.
 
 ---
 
@@ -57,8 +58,10 @@ Na konci školení má každý účastník:
 | **E** | Guardrails: `litellm_content_filter` (blokace tajemství, maskování PII), PromptGuard (prompt injection), Filter function v Open WebUI | zablokovaný request, maskované PII, zachycená injection, dohledání v logu |
 | **F0** | HTTPS: Caddy, interní CA, důvěra na klientech, streaming, IP klienta za proxy, uzavření portů 3000/4000 | `https://<IP>` a `https://<IP>:8443` bez varování |
 | **F** | Integrace klientů: curl, OpenAI a Anthropic SDK, Claude Code, Codex CLI, Claude Desktop | každý účastník má vlastní virtual key, útrata per klíč |
+| **G** | Lokální model: sdílený model server (Ollama + Qwen3 4B na CPU), napojení do LiteLLM (`ollama_chat/`), guardrails a fallbacky vs. data, Open WebUI (Builtin Tools vypnout) | `qwen-local` přes `curl` i v Open WebUI, spend 0 |
+| Příl. A | Lokální AI model obecně: pojmy, výpočet paměti, HW požadavky, Ollama na notebooku / v Dockeru / s GPU | – |
 
-Ze školení vyřazeno: RAG / Knowledge, Presidio, Cursor (volá gateway ze svého cloudu, lab není z internetu dostupný), modul G (observabilita).
+Ze školení vyřazeno: RAG / Knowledge, Presidio, Cursor (volá gateway ze svého cloudu, lab není z internetu dostupný), původní modul G (observabilita; písmeno G teď patří lokálnímu modelu).
 
 ### Doporučené pořadí a orientační čas
 
@@ -75,8 +78,9 @@ Ze školení vyřazeno: RAG / Knowledge, Presidio, Cursor (volá gateway ze své
 | Část 2, modul D | 1 h | |
 | Část 2, modul E | 1,5 h | |
 | Část 2, moduly F0 + F | 2–2,5 h | import CA na stanicích bývá časově nejnáročnější |
+| Část 2, modul G + příloha A | 1–1,5 h | odpovědi lokálního modelu trvají desítky sekund, sdílený server se při souběhu zpomalí |
 
-Celkem zhruba **2 dny**. F0 je předpoklad pro Claude Desktop, proto musí předcházet modulu F. Moduly A a B lze prohodit (admin vidí všechny modely vždy).
+Celkem zhruba **2 dny**. F0 je předpoklad pro Claude Desktop, proto musí předcházet modulu F. Moduly A a B lze prohodit (admin vidí všechny modely vždy). Modul G staví na modulech C (`config.yaml`) a E (guardrails), na F0/F nezávisí.
 
 ---
 
@@ -105,6 +109,7 @@ Celkem zhruba **2 dny**. F0 je předpoklad pro Claude Desktop, proto musí před
 | `openrouter.ai` | free model (část 1) |
 | `api.anthropic.com` | Claude modely (část 2) |
 | API PromptGuard (`promptguard.co`) | guardrail (modul E) |
+| model server, TCP 11434 (lab síť) | lokální model (modul G) |
 
 **Příchozí přístup ze stanic účastníků na VM:** TCP 22 (SSH), 3000 (Open WebUI), 4000 (LiteLLM), 443 a 8443 (Caddy). Lokální `ufw` zůstává v labu vypnutý (kap. 4.4).
 
@@ -136,6 +141,22 @@ groups                                                             # obsahuje do
 
 > **Rozhodnutí lektora:** Pokud chcete, aby si účastníci instalaci Dockeru vyzkoušeli sami, `prepare.sh` nespouštějte a nechte jen předstažené image (např. ze šablony). Kapitoly 4–5 jsou na ruční průchod napsané.
 
+### 3.4 Model server pro modul G (jedna sdílená VM)
+
+Podrobný postup: [`model-server.md`](model-server.md).
+
+| Položka | Hodnota |
+|---|---|
+| OS | Ubuntu Server 24.04 LTS |
+| CPU / RAM / disk | **8 vCPU** (AVX2, ideálně AVX-512) / **16 GB** / **60 GB SSD** |
+| GPU | ne (inference na CPU) |
+| Software | Docker, compose projekt `/opt/local-llm`: `ollama/ollama:0.40.13` + `caddy:2.11.7` |
+| Model | `qwen3:4b-instruct` (2,5 GB), `OLLAMA_NUM_PARALLEL=4` |
+| Síť odchozí | Docker Hub, `registry.ollama.ai` + CDN (jen při přípravě) |
+| Síť příchozí | TCP 11434 **jen z VM účastníků**, TCP 22 od lektora |
+
+Účastníkům se předá adresa `http://<IP>:11434` a sdílený `LOCAL_LLM_API_KEY`. Proč Qwen3 a ne novější Qwen 3.5: Qwen 3.5 v Ollamě 0.40.13 neumí paralelní requesty a všichni účastníci by čekali v jedné frontě (`model-server.md`, kap. 2.2).
+
 ---
 
 ## 4. Účty a klíče
@@ -147,6 +168,7 @@ groups                                                             # obsahuje do
 | **PromptGuard** | lektor nebo účastník | free tier 5 USD/měsíc, **1 klíč na účet** → pro více VM buď více účtů, nebo sdílený klíč s rizikem vyčerpání free tieru. |
 | Master key, salt key, hesla DB a Admin UI | generuje `prepare.sh` / kap. 6.2 | `LITELLM_SALT_KEY` se po prvním startu nesmí měnit. |
 | Virtual keys | účastníci během labu | pro Open WebUI (kap. 7.1) a pro klienty (část 2, kap. 8.1) |
+| `LOCAL_LLM_API_KEY` | lektor (generuje se na model serveru) | jeden sdílený klíč pro všechny gateway (modul G); po školení vyměnit |
 
 Do free modelů na OpenRouteru se nesmí psát citlivá ani firemní data (poskytovatelé je mohou logovat).
 
@@ -176,16 +198,19 @@ Klienty doporučuji nainstalovat předem (instalace přes firemní proxy nebo be
 - [ ] odchozí i příchozí síťové prostupy podle kap. 3.2 (otestovat z jedné VM a jedné stanice)
 - [ ] účastníci mají účet OpenRouter a API klíč (nebo zajištěné kredity)
 - [ ] Anthropic klíče se spend limitem, PromptGuard klíč(e)
+- [ ] model server podle kap. 3.4 (`model-server.md`), prostup 11434 z VM účastníků
 - [ ] na stanicích: prohlížeč, SSH, `curl`, `jq`, Python, Claude Code, Codex CLI, Claude Desktop, práva na import CA
 
 **Den předem**
 - [ ] `prepare.sh` doběhl na všech VM bez `[ERROR]`, kontrola z kap. 3.3
-- [ ] na jedné VM kompletní zkušební průchod (část 1 kap. 6.5 → část 2 modul F), včetně fallbacku, 429 a guardrails
+- [ ] na jedné VM kompletní zkušební průchod (část 1 kap. 6.5 → část 2 modul G), včetně fallbacku, 429 a guardrails
+- [ ] model server: zátěžový test (`model-server.md`, kap. 5.4), výsledek zapsat do kap. 7
+- [ ] těsně před modulem G: zahřát model (`model-server.md`, kap. 5.2)
 - [ ] klienti Claude Code a Codex CLI otestovaní na čisté stanici (v referenčním labu ověřena jen strana gateway)
 
 **Na konci školení**
 - [ ] uzavření přímých portů 3000/4000 (část 2, kap. 7.8)
-- [ ] zrušení Anthropic a PromptGuard klíčů, případně i OpenRouter klíčů
+- [ ] zrušení Anthropic a PromptGuard klíčů, případně i OpenRouter klíčů; vyměnit `LOCAL_LLM_API_KEY` na model serveru
 - [ ] smazání nebo reset VM
 
 ---
@@ -195,4 +220,6 @@ Klienty doporučuji nainstalovat předem (instalace přes firemní proxy nebo be
 - **Screenshoty:** `navod.md` obsahuje 13 placeholderů `[SCREENSHOT: …]` (registrace OpenRouter, Admin UI, Open WebUI), je potřeba je doplnit.
 - **Klienti:** Claude Code a Codex CLI nebyly v referenčním labu nainstalované, jejich konfigurace je podle oficiální dokumentace. Před školením projít na čisté stanici (viz checklist).
 - **Časový plán** v kap. 2 je odhad, změřit při zkušebním průchodu.
+- **Výkon model serveru** na 8 vCPU / 16 GB není změřený (referenční lab má 2 vCPU: ~4,5 tokenu/s). Změřit zátěžovým testem a podle výsledku upravit `OLLAMA_NUM_PARALLEL` nebo model.
+- **Firewall model serveru** (`DOCKER-USER`, `model-server.md` kap. 4.6) je podle dokumentace Dockeru, v referenčním labu neověřený.
 - **Distribuce klíčů Anthropic/PromptGuard** na VM účastníků: rozhodnout model (sdílený vs. per VM) podle rozpočtu a počtu účastníků.
