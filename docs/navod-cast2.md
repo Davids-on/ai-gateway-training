@@ -1,13 +1,13 @@
 # AI gateway v labu – Část 2: Používání a správa
 
-Školicí návod, navazuje na [Část 1](navod.md) (instalace LiteLLM + Open WebUI v Dockeru). V této části bránu používáme a spravujeme: přidáváme modely, ukazujeme Open WebUI uživatelům, řídíme přístup a útratu, nasazujeme guardrails a HTTPS, připojujeme klienty (API, Claude Code, Claude Desktop, Codex CLI) a nakonec za gateway zapojíme i lokální model na vlastním serveru.
+Školicí návod, navazuje na [Část 1](navod.md) (instalace LiteLLM + Open WebUI v Dockeru). V této části gateway používáme a spravujeme: přidáváme modely, ukazujeme Open WebUI uživatelům, řídíme přístup a útratu, nasazujeme guardraily a HTTPS, připojujeme klienty (API, Claude Code, Claude Desktop, Codex CLI) a nakonec za gateway zapojíme i lokální model na vlastním serveru.
 
 > **Konvence (stejné jako v části 1):**
 > - Příkazy se spouštějí na serveru jako běžný uživatel se sudo, v adresáři `/opt/ai-stack`.
-> - `<IP_SERVERU>` nahraďte IP adresou své VM. V referenčním labu je to `192.0.2.10`.
-> - Hodnoty ve tvaru `<NĚCO>` jsou placeholdery. Skutečná tajemství do návodu ani do gitu nikdy nepatří.
-> - Pro testy přes `curl` si do shellu načtěte proměnné z `.env` (`set -a; . ./.env; set +a`) a po testech shell zavřete. Příkazy na serveru pak místo IP adresy používají proměnnou `$SERVER_IP` z `.env`.
-> - Příkazy a konfigurace **na vaší stanici** (notebooku) mají IP adresu jako placeholder `<IP_SERVERU>`.
+> - Hodnoty ve tvaru `<NAME>` jsou placeholdery, názvy odpovídají proměnným v `.env` (část 1, Konvence): `<SERVER_IP>` je IP adresa vaší VM (v referenčním labu `192.0.2.10`), `<MODEL_SERVER_IP>` adresa model serveru, `<VIRTUAL_KEY>` váš virtual key.
+> - Skutečná tajemství do návodu ani do gitu nikdy nepatří.
+> - Pro testy přes `curl` si do shellu načtěte proměnné z `.env` (`set -a; . ./.env; set +a`) a po testech shell zavřete. Příkazy na serveru pak místo IP adresy používají proměnnou `$SERVER_IP` z `.env`. Po změně `.env` proměnné načtěte znovu.
+> - Příkazy a konfigurace **na vaší stanici** (notebooku) mají IP adresu jako placeholder `<SERVER_IP>`. Pro příkazy si ji na stanici uložte do stejně pojmenované proměnné: `SERVER_IP=<SERVER_IP>`.
 > - Repozitář školení je na serveru v `~/ai-gateway-training` (část 1, kap. 6.1).
 
 > [!TIP]
@@ -53,7 +53,7 @@ open-webui Up 16 hours (healthy)
 postgres Up 16 hours (healthy)
 ```
 
-**Konfigurace po fázích.** Každý modul, který mění konfiguraci serveru, přepne `/opt/ai-stack` na další fázi z repozitáře ([`deploy/stages/`](../deploy/stages/)) skriptem `use-stage.sh`. Ten nejdřív ukáže, co se změní, pak starou verzi zazálohuje (`*.bak-<čas>`) a novou zkopíruje:
+**Konfigurace po fázích.** Každý modul, který mění konfiguraci serveru, přepne `/opt/ai-stack` na další fázi z repozitáře ([`deploy/stages/`](../deploy/stages/)) skriptem `use-stage.sh`. Ten nejdřív ukáže, co se změní, pak starou verzi zazálohuje (`*.bak-<TIMESTAMP>`) a novou zkopíruje:
 
 | Modul | Fáze | Co přibude |
 |---|---|---|
@@ -89,7 +89,7 @@ stat -c '%a %U' /opt/ai-stack/.env
 ```
 ANTHROPIC_API_KEY 106 sk-ant-
 PROMPTGUARD_API_KEY 52 pg_live
-600 <uživatel>
+600 <USER>
 ```
 
 > [!NOTE]
@@ -406,7 +406,7 @@ curl -s http://localhost:4000/v1/models -H "Authorization: Bearer $OPENWEBUI_LIT
 
 **Co a proč:** Většina zaměstnanců s gateway pracuje přes Open WebUI, ne přes API. V tomto modulu ukážeme, co jim Open WebUI nabízí nad rámec „chatu s modelem“: vlastní asistenty s pevně daným chováním, knihovnu promptů a porovnání modelů. Všechno běží přes LiteLLM, takže limity, guardraily i spend tracking z modulů A, D a E platí i tady.
 
-Open WebUI otevřete na `http://<IP_SERVERU>:3000` a přihlaste se jako admin. Po modulu F0 bude dostupné i přes HTTPS na `https://<IP_SERVERU>`.
+Open WebUI otevřete na `http://<SERVER_IP>:3000` a přihlaste se jako admin. Po modulu F0 bude dostupné i přes HTTPS na `https://<SERVER_IP>`.
 
 > **Předpoklad:** Modul A je hotový: Claude modely jsou v LiteLLM a virtual key `open-webui` je smí používat (kap. 2.8). Aby je viděli i běžní uživatelé, nastavíme v modulu C (kap. 4.2). Admin vidí všechny modely vždy.
 
@@ -531,7 +531,7 @@ Rozeslat pozvánky na školení  Petr    do pátku
 
 ### 3.4 Porovnání modelů vedle sebe
 
-V nabídce modelů klikněte na **+** a přidejte druhý model, nebo otevřete rovnou URL `http://<IP_SERVERU>:3000/?models=claude-haiku-5-5,nemotron-3-ultra`. Jeden dotaz se pošle oběma modelům a odpovědi se zobrazí vedle sebe (na úzké obrazovce pod sebou):
+V nabídce modelů klikněte na **+** a přidejte druhý model, nebo otevřete rovnou URL `http://<SERVER_IP>:3000/?models=claude-haiku-5-5,nemotron-3-ultra`. Jeden dotaz se pošle oběma modelům a odpovědi se zobrazí vedle sebe (na úzké obrazovce pod sebou):
 
 ```
 Vysvětli jednou větou, co je AI gateway.
@@ -706,7 +706,7 @@ tým (team)          např. "vyvojari": 20 USD / 30 dní, jen Sonnet + Haiku
 | `rpm_limit` / `tpm_limit` | requesty / tokeny za minutu |
 | `models` | seznam povolených modelů (prázdný = vše, co dovolí nadřazená úroveň) |
 
-Všechny operace děláme přes API s master key. Totéž jde naklikat v Admin UI (`http://<IP_SERVERU>:4000/ui` → *Teams*, *Internal Users*, *Virtual Keys*).
+Všechny operace děláme přes API s master key. Totéž jde naklikat v Admin UI (`http://<SERVER_IP>:4000/ui` → *Teams*, *Internal Users*, *Virtual Keys*).
 
 ```bash
 cd /opt/ai-stack
@@ -1117,9 +1117,14 @@ V Admin UI: *Logs* → detail requestu → *Guardrails*. Události PromptGuardu 
 Hlavní ochrana proto patří na gateway. Filtr v Open WebUI je doplněk (a jak ukáže ověření níže, ne zcela těsný).
 
 **Postup:**
-1. Kód filtru je v repozitáři: [`deploy/openwebui/gateway_notice_filter.py`](../deploy/openwebui/gateway_notice_filter.py). `inlet()` odmítne zprávu s rodným číslem, `outlet()` připojí k odpovědi upozornění. Texty a regex jsou ve *Valves* (nastavitelné z UI bez úpravy kódu).
+1. Kód filtru je v repozitáři: [`deploy/openwebui/gateway_notice_filter.py`](../deploy/openwebui/gateway_notice_filter.py). `inlet()` odmítne zprávu s rodným číslem, `outlet()` připojí k odpovědi upozornění. Texty a regex jsou ve *Valves* (nastavitelné z UI bez úpravy kódu). Výchozí texty jsou anglicky, české znění nastavíte v kroku 4.
 2. *Admin Panel → Functions → New Function*: obsah editoru nahraďte obsahem souboru. *Function Name* a *ID* se vyplní z hlavičky (`title:`), *Description* doplňte. Uložit, potvrdit varování o spouštění kódu.
 3. V seznamu funkcí filtr **zapnout** (přepínač) a v menu `…` zapnout **Global**. Bez *Global* by se filtr musel přiřadit každému modelu zvlášť (*Workspace → Models → Filters*).
+4. Texty pro uživatele v češtině: u funkce ikona ozubeného kola (*Valves*):
+   - `block_message`: `Zpráva obsahuje rodné číslo. Osobní údaje do AI neposílejte – odstraňte je a zkuste to znovu.`
+   - `disclaimer`: `_Odpověď vygenerovala AI. Před použitím ji ověřte._`
+
+   Uložit. Hodnoty se ukládají v databázi Open WebUI, kód filtru zůstává beze změny.
 
 Stav ověříte přes API Open WebUI (z konzole prohlížeče na stránce Open WebUI, kde je přihlášený admin):
 ```js
@@ -1128,6 +1133,8 @@ await (await fetch('/api/v1/functions/', {headers:{Authorization:'Bearer '+local
 ```
 
 **Ověření:**
+Ukázky níže jsou s českými texty z kroku 4 (bez něj filtr odpoví anglicky: `The message contains a Czech birth number …` a `AI-generated answer – verify it before use.`).
+
 - Dotaz `Jaké je hlavní město Polska? Odpověz jedním slovem.` vrátí odpověď s upozorněním:
   ```
   Varšava
@@ -1194,7 +1201,7 @@ await (await fetch('/api/v1/functions/', {headers:{Authorization:'Bearer '+local
 ## 7. Modul F0: HTTPS pro gateway (Caddy)
 
 **Co a proč:** Zatím jde veškerý provoz přes nešifrované HTTP, včetně virtual keys a promptů. Pro školení to stačilo, ale:
-- **Claude Desktop** se ke gatewayi připojí **jen přes HTTPS** (výjimkou je jen loopback `127.0.0.1`),
+- **Claude Desktop** se ke gateway připojí **jen přes HTTPS** (výjimkou je jen loopback `127.0.0.1`),
 - klíče a prompty by po síti neměly chodit v čitelné podobě,
 - prohlížeče u HTTP stránek omezují některé funkce (schránka, mikrofon v Open WebUI).
 
@@ -1209,7 +1216,7 @@ klient ──HTTPS──▶ Caddy :8443 ──HTTP (ai-net)──▶ litellm:400
 
 | Otázka | Volba v labu | V produkci |
 |---|---|---|
-| Adresa | IP + port: `https://<IP_SERVERU>` (Open WebUI), `https://<IP_SERVERU>:8443` (LiteLLM) | DNS jména, např. `chat.firma.cz`, `llm.firma.cz`, obě na 443 |
+| Adresa | IP + port: `https://<SERVER_IP>` (Open WebUI), `https://<SERVER_IP>:8443` (LiteLLM) | DNS jména, např. `chat.firma.cz`, `llm.firma.cz`, obě na 443 |
 | Certifikát | interní CA Caddy (`tls internal`) | firemní CA (AD CS) nebo veřejná CA (ACME) |
 | Porty 3000/4000 | zatím zůstávají otevřené (příklady z části 1) | jen `127.0.0.1`, ven pouze Caddy |
 
@@ -1313,7 +1320,7 @@ grep '^SERVER_IP=' .env
 ```
 SERVER_IP=192.0.2.10
 ```
-Pokud řádek chybí nebo obsahuje jinou adresu, než kterou klienti používají: `./set-env.sh SERVER_IP <IP_SERVERU>`.
+Pokud řádek chybí nebo obsahuje jinou adresu, než kterou klienti používají: `./set-env.sh SERVER_IP <SERVER_IP>`.
 
 ### 7.4 Nasazení
 
@@ -1347,7 +1354,7 @@ open-webui Up 17 hours (healthy) 0.0.0.0:3000->8080/tcp
 
 **Export root certifikátu** ze serveru na admin stanici (certifikát je veřejný, privátní klíč zůstává v kontejneru):
 ```bash
-ssh <server> 'docker compose -f /opt/ai-stack/docker-compose.yml cp caddy:/data/caddy/pki/authorities/local/root.crt -' \
+ssh <USER>@<SERVER_IP> 'docker compose -f /opt/ai-stack/docker-compose.yml cp caddy:/data/caddy/pki/authorities/local/root.crt -' \
   | tar -xO > caddy-root.crt
 openssl x509 -in caddy-root.crt -noout -subject -enddate -fingerprint -sha256
 ```
@@ -1360,7 +1367,7 @@ sha256 Fingerprint=AA:BB:CC:DD:…:EE:FF
 
 **Bez důvěry** klient spojení odmítne:
 ```bash
-curl -s -o /dev/null -w "%{http_code} %{errormsg}\n" https://<IP_SERVERU>/health
+curl -s -o /dev/null -w "%{http_code} %{errormsg}\n" https://<SERVER_IP>/health
 ```
 ```
 000 SSL certificate problem: unable to get local issuer certificate
@@ -1380,10 +1387,10 @@ curl -s -o /dev/null -w "%{http_code} %{errormsg}\n" https://<IP_SERVERU>/health
 
 **a) HTTPS s důvěryhodným rootem** (z admin stanice):
 ```bash
-IP=<IP_SERVERU>
-curl -s --cacert caddy-root.crt https://$IP/health; echo
-curl -s --cacert caddy-root.crt https://$IP:8443/health/liveliness; echo
-curl -s -o /dev/null -w "%{http_code}\n" --cacert caddy-root.crt https://$IP:8443/ui/
+SERVER_IP=<SERVER_IP>
+curl -s --cacert caddy-root.crt https://$SERVER_IP/health; echo
+curl -s --cacert caddy-root.crt https://$SERVER_IP:8443/health/liveliness; echo
+curl -s -o /dev/null -w "%{http_code}\n" --cacert caddy-root.crt https://$SERVER_IP:8443/ui/
 ```
 ```
 {"status":true}
@@ -1396,8 +1403,8 @@ curl -s -o /dev/null -w "%{http_code}\n" --cacert caddy-root.crt https://$IP:844
 
 **Certifikát a řetěz:** Server musí posílat i intermediate certifikát. Bez něj Claude Desktop hlásí `UNABLE_TO_VERIFY_LEAF_SIGNATURE`.
 ```bash
-echo | openssl s_client -connect $IP:8443 -CAfile caddy-root.crt 2>/dev/null | grep -E 'issuer=|Verify return code'
-echo | openssl s_client -connect $IP:8443 2>/dev/null | openssl x509 -noout -ext subjectAltName -enddate
+echo | openssl s_client -connect $SERVER_IP:8443 -CAfile caddy-root.crt 2>/dev/null | grep -E 'issuer=|Verify return code'
+echo | openssl s_client -connect $SERVER_IP:8443 2>/dev/null | openssl x509 -noout -ext subjectAltName -enddate
 ```
 ```
 issuer=CN=Caddy Local Authority - ECC Intermediate
@@ -1438,7 +1445,7 @@ Události přicházejí postupně s rostoucím časem. Kdyby proxy bufferovala, 
 
 **c) Port 80 je zavřený**, Caddy na HTTP neposlouchá (ze stanice):
 ```bash
-curl -s -m 5 -o /dev/null -w "%{http_code} %{errormsg}\n" http://$IP/
+curl -s -m 5 -o /dev/null -w "%{http_code} %{errormsg}\n" http://$SERVER_IP/
 ```
 ```
 000 Failed to connect to 192.0.2.10 port 80 ...: Couldn't connect to server
@@ -1467,10 +1474,10 @@ Skutečnou IP klienta posílá Caddy v hlavičce `X-Forwarded-For`. LiteLLM ji p
 
 Až budou všichni klienti přepnutí na HTTPS a po modulu G (poslední fáze konfigurace; `use-stage.sh` by tyto ruční úpravy přepsal):
 1. v `docker-compose.yml` změnit `"4000:4000"` na `"127.0.0.1:4000:4000"` a `"3000:8080"` na `"127.0.0.1:3000:8080"`,
-2. v `.env` nastavit `WEBUI_URL=https://<IP_SERVERU>`,
+2. v `.env` nastavit `WEBUI_URL=https://<SERVER_IP>`,
 3. v `config.yaml` přidat do `general_settings` `use_x_forwarded_for: true`,
 4. `docker compose up -d` a `docker compose restart litellm`,
-5. ověřit, že `http://<IP_SERVERU>:4000` a `:3000` z jiného počítače nejsou dostupné.
+5. ověřit, že `http://<SERVER_IP>:4000` a `:3000` z jiného počítače nejsou dostupné.
 
 <details>
 <summary>🔧 Řešení problémů</summary>
@@ -1503,7 +1510,7 @@ Až budou všichni klienti přepnutí na HTTPS a po modulu G (poslední fáze ko
 
 LiteLLM všechna tato API překládá na API poskytovatele. Codex (klient od OpenAI) tak může pracovat s Claude modely.
 
-**Base URL v labu:** `https://<IP_SERVERU>:8443` (v referenčním labu `https://192.0.2.10:8443`). Některé klienty chtějí URL **s** `/v1` (OpenAI SDK, Codex), jiné **bez** (Claude Code, Claude Desktop, Anthropic SDK, protože si `/v1/messages` přidávají samy). To je nejčastější chyba při konfiguraci.
+**Base URL v labu:** `https://<SERVER_IP>:8443` (v referenčním labu `https://192.0.2.10:8443`). Některé klienty chtějí URL **s** `/v1` (OpenAI SDK, Codex), jiné **bez** (Claude Code, Claude Desktop, Anthropic SDK, protože si `/v1/messages` přidávají samy). To je nejčastější chyba při konfiguraci.
 
 **Předpoklad:** Klient důvěřuje root CA Caddy (kap. 7.5).
 
@@ -1527,7 +1534,7 @@ Klíč (`sk-…`) se zobrazí jen jednou. Uživatel si ho uloží do správce he
 
 Na stanici si pro testy načtěte proměnné (`read -s` klíč nevypíše na obrazovku ani neuloží do historie):
 ```bash
-export GW=https://<IP_SERVERU>:8443
+export GW=https://<SERVER_IP>:8443     # base URL gateway (bez /v1)
 read -rsp "Virtual key: " VK; echo
 ```
 
@@ -1573,13 +1580,13 @@ curl -s $GW/v1/messages -H "x-api-key: $VK" -H "anthropic-version: 2023-06-01" -
 ```python
 # OpenAI SDK – base_url S /v1
 from openai import OpenAI
-client = OpenAI(base_url="https://<IP_SERVERU>:8443/v1", api_key=os.environ["VK"])
+client = OpenAI(base_url="https://<SERVER_IP>:8443/v1", api_key=os.environ["VK"])
 r = client.chat.completions.create(model="claude-haiku-5-5",
         messages=[{"role": "user", "content": "Ahoj"}], max_tokens=300)
 
 # Anthropic SDK – base_url BEZ /v1
 import anthropic
-client = anthropic.Anthropic(base_url="https://<IP_SERVERU>:8443", api_key=os.environ["VK"])
+client = anthropic.Anthropic(base_url="https://<SERVER_IP>:8443", api_key=os.environ["VK"])
 r = client.messages.create(model="claude-sonnet-5-5", max_tokens=300,
         messages=[{"role": "user", "content": "Ahoj"}])
 ```
@@ -1637,7 +1644,7 @@ curl -s $GW/v1/messages/count_tokens -H "x-api-key: $VK" -H "anthropic-version: 
 
 d) **Beta hlavičky** (např. `anthropic-beta: context-1m-2025-08-07` pro 1M kontext) gateway propustí. Request s hlavičkou skončil normální odpovědí.
 
-e) **Streaming** přes Caddy viz kap. 7.6 c). Guardraily platí i pro `/v1/messages` (kap. 6.4 f).
+e) **Streaming** přes Caddy viz kap. 7.6 b). Guardraily platí i pro `/v1/messages` (kap. 6.4 e).
 
 </details>
 
@@ -1645,7 +1652,7 @@ e) **Streaming** přes Caddy viz kap. 7.6 c). Guardraily platí i pro `/v1/messa
 
 Nejdřív v shellu a ověřit, teprve pak natrvalo:
 ```bash
-export ANTHROPIC_BASE_URL=https://<IP_SERVERU>:8443        # BEZ /v1
+export ANTHROPIC_BASE_URL=https://<SERVER_IP>:8443        # BEZ /v1
 export ANTHROPIC_AUTH_TOKEN=<VIRTUAL_KEY>               # posílá se jako Authorization: Bearer
 export NODE_EXTRA_CA_CERTS=$HOME/caddy-root.crt         # Node.js nepoužívá systémové úložiště
 # modely, které gateway a tým povolují (jinak Claude Code může chtít model, který klíč nemá):
@@ -1660,9 +1667,9 @@ Natrvalo do `~/.claude/settings.json` (platí pro všechny projekty a i pro agen
 ```json
 {
   "env": {
-    "ANTHROPIC_BASE_URL": "https://<IP_SERVERU>:8443",
+    "ANTHROPIC_BASE_URL": "https://<SERVER_IP>:8443",
     "ANTHROPIC_AUTH_TOKEN": "<VIRTUAL_KEY>",
-    "NODE_EXTRA_CA_CERTS": "/Users/<uživatel>/caddy-root.crt",
+    "NODE_EXTRA_CA_CERTS": "/Users/<USER>/caddy-root.crt",
     "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-sonnet-5-5",
     "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5-5",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-5-5"
@@ -1744,7 +1751,7 @@ model_provider = "litellm"
 
 [model_providers.litellm]
 name = "LiteLLM gateway"
-base_url = "https://<IP_SERVERU>:8443/v1"     # S /v1
+base_url = "https://<SERVER_IP>:8443/v1"     # S /v1
 env_key = "LITELLM_API_KEY"                # název proměnné s klíčem, ne klíč samotný
 wire_api = "responses"
 stream_idle_timeout_ms = 7200000           # dlouhé kroky agenta
@@ -1757,7 +1764,7 @@ export CODEX_CA_CERTIFICATE=$HOME/caddy-root.crt   # interní CA (záložně čt
 codex
 codex --model claude-haiku-5-5                     # jiný model jen pro tento běh
 ```
-Volitelně si Codex (0.159+) umí načíst seznam modelů z gateway: v sekci `[model_providers.litellm]` doplňte `model_catalog_url = "https://<IP_SERVERU>:8443/v1/models"` a do konfigurace přidejte `[features]` s `api_key_model_discovery = true`.
+Volitelně si Codex (0.159+) umí načíst seznam modelů z gateway: v sekci `[model_providers.litellm]` doplňte `model_catalog_url = "https://<SERVER_IP>:8443/v1/models"` a do konfigurace přidejte `[features]` s `api_key_model_discovery = true`.
 
 > Codex je laděný na modely OpenAI. S Claude modely funguje, ale chování nástrojů a promptů se může lišit od nativního Claude Code. Na školení je to dobrá ukázka, že gateway odděluje volbu **klienta** od volby **modelu**.
 
@@ -1766,8 +1773,8 @@ Volitelně si Codex (0.159+) umí načíst seznam modelů z gateway: v sekci `[m
 **Jak to funguje:** Claude Desktop umí místo účtu claude.ai používat vlastní inference přes gateway (*third-party inference*). Konfiguraci čte z vlastního nastavení aplikace, **ne** z `ANTHROPIC_BASE_URL` ani `settings.json`. Dokumentace: [Claude Desktop – LLM gateway](https://claude.com/docs/third-party/claude-desktop/gateway).
 
 **Požadavky na gateway** (všechny jsme ověřili výše):
-- `POST /v1/messages` se streamingem a tool use (kap. 8.3 a, 7.6 c),
-- **HTTPS** s kompletním řetězem certifikátů (kap. 7.6 b), HTTP projde jen na `127.0.0.1`,
+- `POST /v1/messages` se streamingem a tool use (kap. 8.3 a, 7.6 b),
+- **HTTPS** s kompletním řetězem certifikátů (kap. 7.6, kontrola řetězu), HTTP projde jen na `127.0.0.1`,
 - zachování prompt cachingu včetně objektu `cache_creation` v `usage` (kap. 2.6 c, 8.3 b),
 - volitelně `GET /v1/models`. LiteLLM při hlavičce `anthropic-version` vrací Anthropic formát, ze kterého si Desktop sestaví nabídku modelů (zobrazí jen modely s rozpoznatelným Claude ID):
   ```bash
@@ -1782,7 +1789,7 @@ Volitelně si Codex (0.159+) umí načíst seznam modelů z gateway: v sekci `[m
 2. *Help → Troubleshooting → Enable Developer Mode* (aplikace se restartuje a přibude menu *Developer*).
 3. *Developer → Configure Third-Party Inference…* → sekce **Connection**:
    - **Inference provider:** Gateway
-   - **Gateway base URL:** `https://<IP_SERVERU>:8443` (bez `/v1`)
+   - **Gateway base URL:** `https://<SERVER_IP>:8443` (bez `/v1`)
    - **Credential kind:** API key, **Gateway API key:** virtual key
    - **Auth scheme:** bearer (výchozí; LiteLLM přijme i `x-api-key`)
 4. Uložit a restartovat. V nabídce modelů by měly být `claude-sonnet-5-5` a `claude-haiku-5-5`.
@@ -1828,7 +1835,7 @@ curl -s "http://localhost:4000/user/info?user_id=jan.novak" -H "Authorization: B
 
 ## 9. Modul G: Lokální model přes AI gateway
 
-**Co a proč:** Všechny dosavadní modely běží v cloudu: prompty odcházejí k OpenRouteru nebo Anthropicu. Pro některá data to není přijatelné (osobní údaje, interní dokumenty, regulace) a za každý token se platí. Řešením je **lokální model** na vlastním hardwaru. Do gateway ho připojíme jako další model vedle cloudových. Klienti tak dál používají jednu adresu, jeden klíč a jedno API a jen si vyberou model. Gateway nad ním stejně jako u ostatních modelů řeší klíče, limity, guardrails i spend log.
+**Co a proč:** Všechny dosavadní modely běží v cloudu: prompty odcházejí k OpenRouteru nebo Anthropicu. Pro některá data to není přijatelné (osobní údaje, interní dokumenty, regulace) a za každý token se platí. Řešením je **lokální model** na vlastním hardwaru. Do gateway ho připojíme jako další model vedle cloudových. Klienti tak dál používají jednu adresu, jeden klíč a jedno API a jen si vyberou model. Gateway nad ním stejně jako u ostatních modelů řeší klíče, limity, guardraily i spend log.
 
 ```
 Open WebUI / klienti ──▶ LiteLLM ──┬──▶ OpenRouter, Anthropic        (cloud)
@@ -1844,7 +1851,7 @@ Open WebUI / klienti ──▶ LiteLLM ──┬──▶ OpenRouter, Anthropic 
 
 | Hodnota | Příklad (referenční lab) |
 |---|---|
-| adresa model serveru | `http://<IP_MODEL_SERVERU>:11434` (v referenčním labu `http://192.0.2.10:11434`) |
+| adresa model serveru | `http://<MODEL_SERVER_IP>:11434` (v referenčním labu `http://192.0.2.10:11434`) |
 | sdílený API klíč | `<LOCAL_LLM_API_KEY>` (začíná `sk-local-`) |
 | název modelu | `qwen3:4b-instruct` |
 
@@ -1855,7 +1862,7 @@ Open WebUI / klienti ──▶ LiteLLM ──┬──▶ OpenRouter, Anthropic 
 Uložte adresu a klíč do `.env` skriptem `set-env.sh` (klíč se zeptá skrytě):
 ```bash
 cd /opt/ai-stack
-./set-env.sh LOCAL_LLM_API_BASE http://<IP_MODEL_SERVERU>:11434
+./set-env.sh LOCAL_LLM_API_BASE http://<MODEL_SERVER_IP>:11434
 ./set-env.sh LOCAL_LLM_API_KEY
 ```
 ```

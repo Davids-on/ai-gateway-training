@@ -23,7 +23,7 @@ Na konci školení má každý účastník:
 - běžící stack v Dockeru (`/opt/ai-stack`), zálohovaný a s postupem pro update,
 - čtyři cloudové modely za jednotnými aliasy, s fallbackem mezi poskytovateli, a jeden lokální model na vlastním serveru,
 - týmy, virtual keys s budgety a rate limity, přehled útraty,
-- guardrails (blokace tajemství, maskování PII, detekce prompt injection),
+- guardraily (blokace tajemství, maskování PII, detekce prompt injection),
 - HTTPS přes Caddy s vlastní CA,
 - připojené klienty: API (OpenAI i Anthropic formát), Claude Code, Codex CLI, Claude Desktop.
 
@@ -39,12 +39,12 @@ Na konci školení má každý účastník:
 |---|---|---|---|
 | 1 | Úvod | LLM, tokeny, proč AI gateway, LiteLLM, Open WebUI, Docker v kostce, architektura | – (teorie) |
 | 2 | Prerekvizity | VM, účet a API klíč OpenRouter, free limity, přehled portů a adresářů | klíč vytvořen |
-| 3 | Krok 0: Průzkum | prostředky VM, kolize (Docker/Podman), obsazené porty, firewall, internet | výchozí stav zdokumentován |
-| 4 | Krok 1: Příprava systému | `apt upgrade`, časové pásmo, nástroje, `ufw` (a proč ho Docker obchází) | – |
-| 5 | Krok 2: Docker | oficiální repo s ověřením GPG klíče, instalace, skupina `docker` (= root), tahák příkazů | `hello-world` |
-| 6 | Krok 3: LiteLLM + PostgreSQL | repozitář a konfigurace fáze `1-base`, `.env` a tajemství (`set-env.sh`), `config.yaml`, `docker-compose.yml`, spuštění, Admin UI | `/v1/models`, chat přes `curl` |
-| 7 | Krok 4: Open WebUI | virtual key pro Open WebUI, služba v compose, první admin účet | chat v prohlížeči, záznam ve spend logu |
-| 8 | Krok 5: Provoz | stav a logy, změny konfigurace, update verze, záloha a obnova | záloha vytvořena |
+| 3 | Průzkum výchozího stavu | prostředky VM, kolize (Docker/Podman), obsazené porty, firewall, internet | výchozí stav zdokumentován |
+| 4 | Příprava systému | `apt upgrade`, časové pásmo, nástroje, `ufw` (a proč ho Docker obchází) | – |
+| 5 | Docker | oficiální repo s ověřením GPG klíče, instalace, skupina `docker` (= root), tahák příkazů | `hello-world` |
+| 6 | LiteLLM + PostgreSQL | repozitář a konfigurace fáze `1-base`, `.env` a tajemství (`set-env.sh`), `config.yaml`, `docker-compose.yml`, spuštění, Admin UI | `/v1/models`, chat přes `curl` |
+| 7 | Open WebUI | virtual key pro Open WebUI, služba v compose, první admin účet | chat v prohlížeči, záznam ve spend logu |
+| 8 | Provoz | stav a logy, změny konfigurace, update verze (jen výklad), záloha a obnova | záloha vytvořena |
 | 9 | Bezpečnost | tajemství, skupina `docker`, vystavené porty, chybějící HTTPS | – (diskuse) |
 | 10–11 | Další kroky, odkazy | návaznost na část 2; mimo rozsah: SSO, SIEM, automatizace | – |
 
@@ -57,14 +57,14 @@ Na konci školení má každý účastník:
 | **C** | Uživatelé, role, skupiny, viditelnost modelů | skupina „Pilot“ vidí jen vybrané modely |
 | **D** | Týmy, interní uživatelé, virtual keys, `max_budget`, `rpm_limit`, reporting útraty | klíč s RPM limitem → `429`, klíč s budgetem → vyčerpání |
 | **E** | Guardrails (konfigurace `3-guardrails`): `litellm_content_filter` (blokace tajemství, maskování PII), PromptGuard (prompt injection), Filter function v Open WebUI | zablokovaný request, maskované PII, zachycená injection, dohledání v logu |
-| **F0** | HTTPS (konfigurace `4-https`): Caddy, interní CA, důvěra na klientech, streaming, IP klienta za proxy, uzavření portů 3000/4000 | `https://<IP>` a `https://<IP>:8443` bez varování |
+| **F0** | HTTPS (konfigurace `4-https`): Caddy, interní CA, důvěra na klientech, streaming, IP klienta za proxy, uzavření portů 3000/4000 | `https://<SERVER_IP>` a `https://<SERVER_IP>:8443` bez varování |
 | **F** | Integrace klientů: curl, OpenAI a Anthropic SDK, Claude Code, Codex CLI, Claude Desktop | každý účastník má vlastní virtual key, útrata per klíč |
-| **G** | Lokální model (konfigurace `5-local-model`): sdílený model server (Ollama + Qwen3 4B na CPU), napojení do LiteLLM (`ollama_chat/`), guardrails a fallbacky vs. data, Open WebUI (Builtin Tools vypnout) | `qwen-local` přes `curl` i v Open WebUI, spend 0 |
+| **G** | Lokální model (konfigurace `5-local-model`): sdílený model server (Ollama + Qwen3 4B na CPU), napojení do LiteLLM (`ollama_chat/`), guardraily a fallbacky vs. data, Open WebUI (Builtin Tools vypnout) | `qwen-local` přes `curl` i v Open WebUI, spend 0 |
 | Příl. A | Lokální AI model obecně: pojmy, výpočet paměti, HW požadavky, Ollama na notebooku / v Dockeru / s GPU | – |
 
 Ze školení vyřazeno: RAG / Knowledge, Presidio, Cursor (volá gateway ze svého cloudu, lab není z internetu dostupný), observabilita.
 
-**Konfigurace po fázích:** Moduly A, E, F0 a G mění konfiguraci serveru. Každý přepne `/opt/ai-stack` na další fázi z [`deploy/stages/`](../deploy/stages/) skriptem `./use-stage.sh <fáze>` (ukáže `diff`, zazálohuje, zkopíruje). Ostatní moduly konfiguraci nemění.
+**Konfigurace po fázích:** Moduly A, E, F0 a G mění konfiguraci serveru. Každý přepne `/opt/ai-stack` na další fázi z [`deploy/stages/`](../deploy/stages/) skriptem `./use-stage.sh <stage>` (ukáže `diff`, zazálohuje, zkopíruje). Ostatní moduly konfiguraci nemění.
 
 > Písmena modulů části 2 odpovídají pořadí ve výuce (A modely → B Open WebUI → C uživatelé). Starší záznamy v `command-log.md` používají původní značení (A Open WebUI, B uživatelé, C modely).
 
@@ -125,7 +125,7 @@ Lab nemá DNS pro `lab.example.com`, všechno jede přes IP. Certifikát Caddy s
 Aby se ~9 GB image nestahovalo na místě přes sdílenou linku, lektor VM připraví předem. Podrobně: [`priprava-serveru.md`](priprava-serveru.md).
 
 ```bash
-git clone <URL_REPOZITÁŘE> ~/ai-gateway-training   # v domovském adresáři účtu účastníka
+git clone <REPO_URL> ~/ai-gateway-training   # v domovském adresáři účtu účastníka
 cd ~/ai-gateway-training/deploy
 sudo ./prepare.sh                                  # interaktivně, ne přes ssh bez -t
 ```
@@ -163,7 +163,7 @@ Podrobný postup: [`model-server.md`](model-server.md). Celou přípravu umí sk
 | Síť odchozí | Docker Hub, `registry.ollama.ai` + CDN (jen při přípravě) |
 | Síť příchozí | TCP 11434 **jen z VM účastníků**, TCP 22 od lektora |
 
-Účastníkům se předá adresa `http://<IP>:11434` a sdílený `LOCAL_LLM_API_KEY`. Proč Qwen3 a ne novější Qwen 3.5: Qwen 3.5 v Ollamě 0.40.13 neumí paralelní requesty a všichni účastníci by čekali v jedné frontě (`model-server.md`, kap. 2.2).
+Účastníkům se předá adresa `http://<MODEL_SERVER_IP>:11434` a sdílený `LOCAL_LLM_API_KEY`. Proč Qwen3 a ne novější Qwen 3.5: Qwen 3.5 v Ollamě 0.40.13 neumí paralelní requesty a všichni účastníci by čekali v jedné frontě (`model-server.md`, kap. 2.2).
 
 ---
 
@@ -211,8 +211,8 @@ Klienty doporučuji nainstalovat předem (instalace přes firemní proxy nebo be
 
 **Den předem**
 - [ ] `prepare.sh` doběhl na všech VM bez `[ERROR]`, kontrola z kap. 3.3; na klonech ze šablony spuštěný na každém klonu
-- [ ] `URL_REPOZITÁŘE` je veřejně (nebo účastníkům) dostupná a repozitář je na VM v `~/ai-gateway-training`
-- [ ] na jedné VM kompletní zkušební průchod (část 1 kap. 6.5 → část 2 modul G), včetně fallbacku, 429 a guardrails
+- [ ] `<REPO_URL>` je veřejně (nebo účastníkům) dostupná a repozitář je na VM v `~/ai-gateway-training`
+- [ ] na jedné VM kompletní zkušební průchod (část 1 kap. 6.5 → část 2 modul G), včetně fallbacku, 429 a guardrailů
 - [ ] model server: zátěžový test (`model-server.md`, kap. 5.4), výsledek zapsat do kap. 7
 - [ ] těsně před modulem G: zahřát model (`model-server.md`, kap. 5.2)
 - [ ] klienti Claude Code a Codex CLI otestovaní na čisté stanici (v referenčním labu ověřena jen strana gateway)
@@ -231,6 +231,6 @@ Klienty doporučuji nainstalovat předem (instalace přes firemní proxy nebo be
 - **Časový plán** v kap. 2 je odhad, změřit při zkušebním průchodu.
 - **Výkon model serveru** na 8 vCPU / 16 GB není změřený (referenční lab má 2 vCPU: ~4,5 tokenu/s). Změřit zátěžovým testem a podle výsledku upravit `OLLAMA_NUM_PARALLEL` nebo model.
 - **Firewall model serveru** (`DOCKER-USER`, `model-server.md` kap. 4.6) je podle dokumentace Dockeru, v referenčním labu neověřený.
-- **URL repozitáře:** v návodech je placeholder `<URL_REPOZITÁŘE>`, po publikaci na GitHubu ho doplnit (`navod.md` kap. 6.1, `priprava-serveru.md`, tento přehled).
+- **URL repozitáře:** v návodech je placeholder `<REPO_URL>`, po publikaci na GitHubu ho doplnit (`navod.md` kap. 6.1, `priprava-serveru.md`, tento přehled).
 - **Konfigurační fáze:** zdrojem pravdy je `deploy/stages/5-local-model/`, fáze 1–4 se z ní generují (`python3 deploy/stages/build-stages.py`). Po každé změně konfigurace skript spustit a změnu projít v `git diff`.
 - **Distribuce klíčů Anthropic/PromptGuard** na VM účastníků: rozhodnout model (sdílený vs. per VM) podle rozpočtu a počtu účastníků.

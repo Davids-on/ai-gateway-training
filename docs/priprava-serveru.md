@@ -1,6 +1,6 @@
 # Příprava VM účastníků skriptem `prepare.sh`
 
-Podklad pro lektora. Skript [`deploy/prepare.sh`](../deploy/prepare.sh) **předem** provede na VM účastníka všechny přípravy z [části 1, kapitol 4–6](navod.md#4-krok-1-příprava-systému) a stáhne image pro celé školení. Na školení se tak nečeká, až se ~9 GB image stáhne přes sdílenou linku. Samotný stack **nespouští**, to zůstává na účastnících ([část 1, kap. 6.5](navod.md#65-spuštění) a dál).
+Podklad pro lektora. Skript [`deploy/prepare.sh`](../deploy/prepare.sh) **předem** provede na VM účastníka všechny přípravy z [části 1, kapitol 4–6](navod.md#4-příprava-systému) a stáhne image pro celé školení. Na školení se tak nečeká, až se ~9 GB image stáhne přes sdílenou linku. Samotný stack **nespouští**, to zůstává na účastnících ([část 1, kap. 6.5](navod.md#65-spuštění) a dál).
 
 Souhrn přípravy školení (VM, síť, klíče, checklist) je v [`prehled-skoleni.md`](prehled-skoleni.md).
 
@@ -24,7 +24,7 @@ Skript počítá i s **minimalizovanou instalací** Ubuntu Serveru (*Ubuntu Serv
 | 1/7 `apt upgrade`, balíčky (viz tabulka výše), časové pásmo, porty 3000/4000/443/8443 | kap. 3.3, 4.1–4.3 | upgrade lze vynechat přes `--skip-upgrade`; obsazený port = varování |
 | 2/7 Docker Engine + Compose z `download.docker.com` | kap. 5.1–5.3 | instaluje jen při shodě **fingerprintu GPG klíče** |
 | 3/7 uživatel do skupiny `docker` | kap. 5.4 | projeví se po novém přihlášení |
-| 4/7 `/opt/ai-stack`: `docker-compose.yml` a `config.yaml` **fáze `1-base`**, `.env.example`, `set-env.sh`, `use-stage.sh` | kap. 6.1, 6.3, 6.4 | existující `docker-compose.yml` a `config.yaml` **nikdy nepřepisuje** (stack už může být v pozdější fázi); pomocné skripty aktualizuje a starou verzi zazálohuje (`*.bak-<datum>`) |
+| 4/7 `/opt/ai-stack`: `docker-compose.yml` a `config.yaml` **fáze `1-base`**, `.env.example`, `set-env.sh`, `use-stage.sh` | kap. 6.1, 6.3, 6.4 | existující `docker-compose.yml` a `config.yaml` **nikdy nepřepisuje** (stack už může být v pozdější fázi); pomocné skripty aktualizuje a starou verzi zazálohuje (`*.bak-<TIMESTAMP>`) |
 | 5/7 `.env`: tajemství, `SERVER_IP`, `WEBUI_URL`, prázdný `OPENWEBUI_LITELLM_KEY`, API klíče | kap. 6.1, 6.2 | existující hodnoty **nikdy nepřepisuje**; `SERVER_IP` zjistí sám; na klíče se zeptá skrytě |
 | 6/7 validace compose, stažení image **všech fází** (postgres, litellm, open-webui, caddy) + `alpine:3.24.3`, `caddy validate` | kap. 6.5, 7.3, 8.4; část 2: F0 | 3 pokusy při výpadku sítě |
 | 7/7 testovací `docker run`, `docker info` | kap. 5.5 | |
@@ -41,7 +41,7 @@ Skript počítá i s **minimalizovanou instalací** Ubuntu Serveru (*Ubuntu Serv
 Na VM účastníka naklonujte repozitář do domovského adresáře účtu, pod kterým bude účastník pracovat, a jako tento uživatel se sudo spusťte skript **v interaktivním terminálu** (kvůli skrytému zadání klíčů; přes SSH tedy `ssh -t`):
 
 ```bash
-git clone <URL_REPOZITÁŘE> ~/ai-gateway-training     # na minimalizované instalaci: sudo apt-get install -y git
+git clone <REPO_URL> ~/ai-gateway-training     # na minimalizované instalaci: sudo apt-get install -y git
 cd ~/ai-gateway-training/deploy
 sudo ./prepare.sh             # nebo: sudo ./prepare.sh --skip-upgrade
 ```
@@ -67,7 +67,7 @@ Pokud skript běží v terminálu, zeptá se postupně na tři klíče:
 ```
 - **OpenRouter** je potřeba pro část 1. Řídicí znaky (např. ze šipek) znamenají, že se klíč neuloží. Neočekávaný tvar (jiný prefix než `sk-or-v1-` nebo jiná délka než 73 znaků) jen vyvolá varování.
 - **Anthropic** a **PromptGuard** jsou volitelné, potřebuje je až část 2. Prázdný Enter je přeskočí. Stack naběhne i bez nich: compose předá prázdný klíč Anthropic a místo prázdného klíče PromptGuard zástupnou hodnotu `not-configured` (LiteLLM by jinak s guardrailem `promptguard` nenastartoval).
-- Chybějící klíče doplní účastník později příkazem `./set-env.sh NÁZEV` v `/opt/ai-stack`.
+- Chybějící klíče doplní účastník později příkazem `./set-env.sh <NAME>` v `/opt/ai-stack`.
 
 `SERVER_IP` (jde do TLS certifikátu Caddy v modulu F0) a `WEBUI_URL` skript vyplní podle IP adresy rozhraní s výchozí trasou.
 
@@ -119,7 +119,7 @@ head -1 /opt/ai-stack/config.yaml                                  # ... STAGE 1
 
 ## 3. Co dělá účastník po přípravě
 
-Návod ([část 1, kap. 6](navod.md#6-krok-3-litellm-proxy-a-postgresql)) má pro připravenou VM rámečky „VM připravená skriptem“. Ve zkratce:
+Návod ([část 1, kap. 6](navod.md#6-litellm-proxy-a-postgresql)) má pro připravenou VM rámečky „VM připravená skriptem“. Ve zkratce:
 
 1. Kapitoly 4 a 5 jen projde a ověří.
 2. Kap. 6.1 a 6.2: jen ověření; chybějící klíč OpenRouteru doplní `./set-env.sh OPENROUTER_API_KEY`.
@@ -147,4 +147,4 @@ Skript je **idempotentní**. Po přerušení (výpadek sítě při stahování) 
 | `No terminal – OPENROUTER_API_KEY is empty` | Skript běžel bez TTY (např. `ssh server 'sudo ./prepare.sh'`). Klíč doplňte `./set-env.sh OPENROUTER_API_KEY`, nebo spusťte `ssh -t`. |
 | `Port 443 is in use` | Na serveru už běží jiný web server (apache2, nginx). Caddy by v modulu F0 nenastartoval: `sudo ss -tlnp 'sport = :443'`, cizí službu zastavte nebo přesuňte. |
 | `Caddyfile is not valid` | Chyba v `deploy/stages/5-local-model/Caddyfile` (překlep, chybějící závorka). Řádek s chybou je v hlášce, oprava v repu a znovu spustit skript. |
-| `Cannot detect the server IP` | Server nemá výchozí trasu. Doplňte `SERVER_IP` a `WEBUI_URL` v `.env` ručně (`./set-env.sh SERVER_IP <IP>`). |
+| `Cannot detect the server IP` | Server nemá výchozí trasu. Doplňte `SERVER_IP` a `WEBUI_URL` v `.env` ručně (`./set-env.sh SERVER_IP <SERVER_IP>`). |

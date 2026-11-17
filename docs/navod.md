@@ -4,8 +4,9 @@
 
 > **Konvence:**
 > - Příkazy se spouštějí na serveru jako běžný uživatel se sudo.
-> - `<IP_SERVERU>` nahraďte IP adresou své VM. V referenčním labu je to `192.0.2.10`.
-> - Hodnoty ve tvaru `<NĚCO>` jsou placeholdery. Skutečná tajemství do návodu ani do gitu nikdy nepatří.
+> - Hodnoty ve tvaru `<NAME>` jsou placeholdery, nahraďte je svými hodnotami. Názvy odpovídají proměnným v `.env`: `<SERVER_IP>` je IP adresa vaší VM (proměnná `SERVER_IP`, v referenčním labu `192.0.2.10`), `<MODEL_SERVER_IP>` adresa sdíleného model serveru, `<REPO_URL>` adresa repozitáře školení, `<USER>` váš uživatel.
+> - Skutečná tajemství do návodu ani do gitu nikdy nepatří.
+> - Když změníte `.env` (např. skriptem `set-env.sh`) v shellu, do kterého jste dřív načetli proměnné (`set -a; . ./.env; set +a`), načtěte je znovu. Proměnná v shellu má u `docker compose` přednost před `.env`.
 > - Repozitář školení je na serveru naklonovaný v `~/ai-gateway-training` (kap. 6.1).
 
 > [!TIP]
@@ -17,12 +18,12 @@
 **Obsah:**
 1. [Úvod](#1-úvod)
 2. [Prerekvizity](#2-prerekvizity)
-3. [Krok 0: Průzkum výchozího stavu](#3-krok-0-průzkum-výchozího-stavu)
-4. [Krok 1: Příprava systému](#4-krok-1-příprava-systému)
-5. [Krok 2: Docker Engine a Docker Compose](#5-krok-2-docker-engine-a-docker-compose)
-6. [Krok 3: LiteLLM Proxy a PostgreSQL](#6-krok-3-litellm-proxy-a-postgresql)
-7. [Krok 4: Open WebUI](#7-krok-4-open-webui)
-8. [Krok 5: Provoz](#8-krok-5-provoz)
+3. [Průzkum výchozího stavu](#3-průzkum-výchozího-stavu)
+4. [Příprava systému](#4-příprava-systému)
+5. [Docker Engine a Docker Compose](#5-docker-engine-a-docker-compose)
+6. [LiteLLM Proxy a PostgreSQL](#6-litellm-proxy-a-postgresql)
+7. [Open WebUI](#7-open-webui)
+8. [Provoz](#8-provoz)
 9. [Bezpečnostní poznámky](#9-bezpečnostní-poznámky)
 10. [Další kroky](#10-další-kroky)
 11. [Odkazy](#11-odkazy)
@@ -48,7 +49,7 @@ Když ve firmě začne LLM používat víc lidí a aplikací, rychle vznikne cha
 
 | Funkce | Co to znamená v praxi |
 |---|---|
-| **Centrální správa klíčů** | Klíče k poskytovatelům (OpenAI, Anthropic, OpenRouter…) zná jen gateway. Uživatelé a aplikace dostanou vlastní *virtuální klíče*, které lze kdykoli zneplatnit. |
+| **Centrální správa klíčů** | Klíče k poskytovatelům (OpenAI, Anthropic, OpenRouter…) zná jen gateway. Uživatelé a aplikace dostanou vlastní *virtual keys* (virtuální klíče), které lze kdykoli zneplatnit. |
 | **Rate limiting a budgety** | Omezení počtu požadavků či tokenů za minutu a měsíční limit útraty na klíč, uživatele nebo tým. |
 | **Logování a audit** | Kdo, kdy, jaký model, kolik tokenů, případně i obsah promptů (pozor na GDPR). |
 | **Cost tracking** | Přehled útraty podle klíčů, týmů a modelů. |
@@ -56,7 +57,7 @@ Když ve firmě začne LLM používat víc lidí a aplikací, rychle vznikne cha
 
 ### 1.3 Co je LiteLLM
 
-[LiteLLM](https://docs.litellm.ai/) je open-source AI gateway (*LiteLLM Proxy Server*). Navenek poskytuje **API kompatibilní s OpenAI** a uvnitř ho překládá na API více než 100 poskytovatelů. S databází PostgreSQL navíc umí virtuální klíče, uživatele, týmy, budgety, spend tracking a webové **Admin UI**.
+[LiteLLM](https://docs.litellm.ai/) je open-source AI gateway (*LiteLLM Proxy Server*). Navenek poskytuje **API kompatibilní s OpenAI** a uvnitř ho překládá na API více než 100 poskytovatelů. S databází PostgreSQL navíc umí virtual keys, uživatele, týmy, budgety, spend tracking a webové **Admin UI**.
 
 ### 1.4 Co je Open WebUI
 
@@ -83,7 +84,7 @@ flowchart LR
     LL -->|"HTTPS<br/>API klíč poskytovatele"| OR["☁️ OpenRouter<br/>→ NVIDIA Nemotron 3 Ultra (free)"]
 ```
 
-Tok požadavku: uživatel napíše dotaz v Open WebUI → Open WebUI ho pošle na LiteLLM a autentizuje se *virtuálním klíčem* → LiteLLM ověří klíč v Postgresu, zavolá OpenRouter se *skutečným* API klíčem a zapíše spotřebu → odpověď se vrátí uživateli.
+Tok požadavku: uživatel napíše dotaz v Open WebUI → Open WebUI ho pošle na LiteLLM a autentizuje se *virtual key* → LiteLLM ověří klíč v Postgresu, zavolá OpenRouter se *skutečným* API klíčem a zapíše spotřebu → odpověď se vrátí uživateli.
 
 ---
 
@@ -126,7 +127,7 @@ Tok požadavku: uživatel napíše dotaz v Open WebUI → Open WebUI ho pošle n
    - **50 požadavků za den**, pokud účet nikdy nekoupil kredity
    - 1000 požadavků za den, pokud účet koupil alespoň 10 kreditů (≈ 10 USD)
 
-   Pro školení stačí 50 požadavků denně na studenta. Při zátěžových testech ale počítejte s chybou `429 Too Many Requests`.
+   Pro školení stačí 50 požadavků denně na účastníka. Při zátěžových testech ale počítejte s chybou `429 Too Many Requests`.
 6. Klíč si dočasně uložte do správce hesel. Na server ho vložíte v kapitole 6. Nikam jinam ho nepište: ne do chatu, ne do gitu, ne do sdílených dokumentů.
 
 ### 2.3 Přehled služeb, portů a adresářů
@@ -143,12 +144,14 @@ Tok požadavku: uživatel napíše dotaz v Open WebUI → Open WebUI ho pošle n
 | `/opt/ai-stack/docker-compose.yml` | definice služeb |
 | `/opt/ai-stack/config.yaml` | konfigurace LiteLLM (modely) |
 | `/opt/ai-stack/.env` | **tajemství** (klíče, hesla), práva `600` |
+| `/opt/ai-stack/set-env.sh`, `use-stage.sh` | pomocné skripty: zápis do `.env`, přepnutí fáze konfigurace (část 2) |
+| `~/ai-gateway-training/` | repozitář školení se všemi fázemi konfigurace (`deploy/stages/`) |
 | Docker volume `ai-stack_pgdata` | data PostgreSQL |
 | Docker volume `ai-stack_open-webui-data` | data Open WebUI (uživatelé, chaty, nastavení) |
 
 ---
 
-## 3. Krok 0: Průzkum výchozího stavu
+## 3. Průzkum výchozího stavu
 
 **Účel:** Než cokoli nainstalujeme, ověříme, že VM odpovídá zadání, má přístup na internet a nekoliduje s ničím, co tam už je (jiný Docker, obsazené porty). Ušetří to hledání chyb později.
 
@@ -201,7 +204,8 @@ Na čisté instalaci Ubuntu 24.04 bývá výsledek `Status: inactive`.
 
 ```bash
 for u in http://archive.ubuntu.com/ubuntu/ https://download.docker.com/linux/ubuntu/ \
-         https://ghcr.io/v2/ https://registry-1.docker.io/v2/ https://openrouter.ai/api/v1/models; do
+         https://ghcr.io/v2/ https://registry-1.docker.io/v2/ https://openrouter.ai/api/v1/models \
+         https://huggingface.co/api/models/sentence-transformers/all-MiniLM-L6-v2; do
   printf "%-45s -> " "$u"; curl -s -o /dev/null -m 10 -w "%{http_code}\n" "$u"
 done
 ```
@@ -213,6 +217,7 @@ https://download.docker.com/linux/ubuntu/     -> 200
 https://ghcr.io/v2/                           -> 401
 https://registry-1.docker.io/v2/              -> 401
 https://openrouter.ai/api/v1/models           -> 200
+https://huggingface.co/api/models/sentence-transformers/all-MiniLM-L6-v2 -> 200
 ```
 `401` u registrů je **v pořádku**. Registry odpovídá a jen požaduje token, který si Docker sám vyžádá.
 
@@ -229,7 +234,7 @@ https://openrouter.ai/api/v1/models           -> 200
 
 ---
 
-## 4. Krok 1: Příprava systému
+## 4. Příprava systému
 
 ### 4.1 Aktualizace balíčků
 
@@ -338,7 +343,7 @@ sudo ufw disable         # jen pokud je aktivní
 
 ---
 
-## 5. Krok 2: Docker Engine a Docker Compose
+## 5. Docker Engine a Docker Compose
 
 **Účel:** Celý AI stack poběží v kontejnerech. Instalujeme **Docker Engine z oficiálního apt repozitáře Dockeru**, ne balíček `docker.io` z Ubuntu ani snap.
 
@@ -357,7 +362,7 @@ Dokumentace: [Install Docker Engine on Ubuntu](https://docs.docker.com/engine/in
 
 ### 5.1 Odstranění případných starých balíčků
 
-Na čisté VM nic nenajde. Pokud v kroku 0 vyšel nějaký konflikt, odstraňte ho:
+Na čisté VM nic nenajde. Pokud v kap. 3.2 vyšel nějaký konflikt, odstraňte ho:
 
 ```bash
 for pkg in docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc; do
@@ -528,17 +533,17 @@ Přehled příkazů, které budeme používat. Na školení ho jen zmíníme, sl
 | Příkaz | Co dělá |
 |---|---|
 | `docker ps` / `docker ps -a` | běžící / všechny kontejnery |
-| `docker logs -f --tail 100 <kontejner>` | posledních 100 řádků logu a dál sleduje (`Ctrl+C` ukončí) |
-| `docker exec -it <kontejner> sh` | shell uvnitř běžícího kontejneru |
-| `docker inspect <kontejner>` | kompletní konfigurace v JSON (síť, volumes, env) |
+| `docker logs -f --tail 100 <container>` | posledních 100 řádků logu a dál sleduje (`Ctrl+C` ukončí) |
+| `docker exec -it <container> sh` | shell uvnitř běžícího kontejneru |
+| `docker inspect <container>` | kompletní konfigurace v JSON (síť, volumes, env) |
 | `docker stats --no-stream` | aktuální spotřeba CPU a RAM kontejnerů |
-| `docker stop <k>` / `docker start <k>` / `docker rm <k>` | zastaví / spustí / smaže kontejner |
+| `docker stop <container>` / `docker start <container>` / `docker rm <container>` | zastaví / spustí / smaže kontejner |
 
 **Volumes, sítě a disk:**
 
 | Příkaz | Co dělá |
 |---|---|
-| `docker volume ls` / `docker volume inspect <v>` | seznam / detail volumes |
+| `docker volume ls` / `docker volume inspect <volume>` | seznam / detail volumes |
 | `docker network ls` | seznam sítí |
 | `docker system df` | kolik místa zabírají image, kontejnery a volumes |
 
@@ -548,8 +553,8 @@ Přehled příkazů, které budeme používat. Na školení ho jen zmíníme, sl
 |---|---|
 | `docker compose up -d` | vytvoří a spustí vše na pozadí. Změněné služby znovu vytvoří, nezměněné nechá. |
 | `docker compose ps` | stav služeb včetně healthchecku (`healthy`/`unhealthy`) |
-| `docker compose logs -f <služba>` | logy služby |
-| `docker compose restart <služba>` | restart (nenačte změny v compose ani `.env`, na to je `up -d`) |
+| `docker compose logs -f <service>` | logy služby |
+| `docker compose restart <service>` | restart (nenačte změny v compose ani `.env`, na to je `up -d`) |
 | `docker compose pull` | stáhne image podle verzí v compose |
 | `docker compose config` | zobrazí výslednou konfiguraci po dosazení proměnných z `.env` (**vypíše i tajemství!**) |
 | `docker compose down` | zastaví a smaže kontejnery a síť. **Volumes zůstanou.** |
@@ -574,9 +579,9 @@ Dokumentace: [Docker CLI reference](https://docs.docker.com/reference/cli/docker
 
 ---
 
-## 6. Krok 3: LiteLLM Proxy a PostgreSQL
+## 6. LiteLLM Proxy a PostgreSQL
 
-**Účel:** Spustíme samotnou AI gateway. LiteLLM bude přijímat požadavky ve formátu OpenAI API na portu 4000 a přeposílat je na OpenRouter. PostgreSQL potřebuje pro **virtuální klíče, uživatele, spend tracking, logy požadavků a Admin UI**. Bez databáze funguje LiteLLM jen jako „hloupá“ proxy s jediným master key.
+**Účel:** Spustíme samotnou AI gateway. LiteLLM bude přijímat požadavky ve formátu OpenAI API na portu 4000 a přeposílat je na OpenRouter. PostgreSQL potřebuje pro **virtual keys, uživatele, spend tracking, logy požadavků a Admin UI**. Bez databáze funguje LiteLLM jen jako „hloupá“ proxy s jediným master key.
 
 Dokumentace: [Docker quick start](https://docs.litellm.ai/docs/proxy/docker_quick_start), [Config](https://docs.litellm.ai/docs/proxy/configs), [Production best practices](https://docs.litellm.ai/docs/proxy/prod), [OpenRouter provider](https://docs.litellm.ai/docs/providers/openrouter)
 
@@ -588,7 +593,7 @@ Dokumentace: [Docker quick start](https://docs.litellm.ai/docs/proxy/docker_quic
 Konfigurační soubory jsou v repozitáři školení. Stáhneme ho do domovského adresáře a do `/opt/ai-stack` zkopírujeme konfiguraci **fáze 1** (`deploy/stages/1-base`) a dva pomocné skripty:
 
 ```bash
-git clone <URL_REPOZITÁŘE> ~/ai-gateway-training
+git clone <REPO_URL> ~/ai-gateway-training
 sudo install -d -o "$USER" -g "$USER" -m 750 /opt/ai-stack
 cd /opt/ai-stack
 cp ~/ai-gateway-training/deploy/stages/1-base/{docker-compose.yml,config.yaml} .
@@ -670,7 +675,7 @@ chmod 600 .env
 
 Navíc existující řádek se stejným názvem **nahradí** (ruční `>>` by vytvořil duplicitu) a odmítne hodnotu s řídicími znaky. Ty vzniknou, když při vkládání klíče stisknete šipku, Home apod.: `read` uloží do proměnné i escape sekvenci terminálu (např. `ESC [ D`). Na obrazovce není vidět, ale LiteLLM pak hlásí *„Forbidden control character detected in headers“*. Totéž způsobí `\r` ze schránky ve Windows. Klíč OpenRouteru má **73 znaků**.
 
-Hodnotu lze skriptu předat i rourou (`příkaz | ./set-env.sh NÁZEV`), to využijeme v kap. 7.1.
+Hodnotu lze skriptu předat i rourou (`<command> | ./set-env.sh <NAME>`), to využijeme v kap. 7.1.
 
 </details>
 
@@ -681,7 +686,7 @@ Hodnotu lze skriptu předat i rourou (`příkaz | ./set-env.sh NÁZEV`), to vyu�
 ```bash
 cd /opt/ai-stack
 umask 077
-IP=$(ip -4 route get 1.1.1.1 | awk '{for (i=1;i<NF;i++) if ($i=="src") print $(i+1)}')
+SERVER_IP=$(ip -4 route get 1.1.1.1 | awk '{for (i=1;i<NF;i++) if ($i=="src") print $(i+1)}')
 cat >> .env <<EOF
 
 # --- LiteLLM ---
@@ -695,9 +700,9 @@ POSTGRES_PASSWORD=$(openssl rand -hex 24)
 
 # --- Open WebUI (kap. 7) ---
 WEBUI_SECRET_KEY=$(openssl rand -hex 32)
-WEBUI_URL=http://$IP:3000
+WEBUI_URL=http://$SERVER_IP:3000
 OPENWEBUI_LITELLM_KEY=
-SERVER_IP=$IP
+SERVER_IP=$SERVER_IP
 EOF
 chmod 600 .env
 cut -d= -f1 .env | grep -v '^#' | grep .      # jen názvy proměnných, ne hodnoty
@@ -783,7 +788,7 @@ Klíčové body:
 
 ### 6.4 `docker-compose.yml`
 
-Soubor [`docker-compose.yml`](../deploy/stages/1-base/docker-compose.yml) fáze 1 popisuje tři služby: `postgres`, `litellm` a `open-webui`. Open WebUI spustíme až v kroku 4, protože potřebuje virtual key, který vytvoří běžící LiteLLM.
+Soubor [`docker-compose.yml`](../deploy/stages/1-base/docker-compose.yml) fáze 1 popisuje tři služby: `postgres`, `litellm` a `open-webui`. Open WebUI spustíme až v kap. 7, protože potřebuje virtual key, který vytvoří běžící LiteLLM.
 
 Na co se v souboru podívat:
 - **Pinované verze image** (`ghcr.io/berriai/litellm:v1.106.6`, nikdy `latest`): víte, co běží, a update je vědomý krok (kap. 8.3).
@@ -964,7 +969,7 @@ curl -s http://localhost:4000/spend/logs -H "Authorization: Bearer $LITELLM_MAST
 
 ### 6.7 Admin UI
 
-V prohlížeči otevřete `http://<IP_SERVERU>:4000/ui` a přihlaste se:
+V prohlížeči otevřete `http://<SERVER_IP>:4000/ui` a přihlaste se:
 - **Username:** `admin` (hodnota `UI_USERNAME`)
 - **Password:** hodnota `UI_PASSWORD` z `.env`. Zobrazíte ji příkazem `grep ^UI_PASSWORD /opt/ai-stack/.env`.
 
@@ -972,7 +977,7 @@ V prohlížeči otevřete `http://<IP_SERVERU>:4000/ui` a přihlaste se:
 
 Po přihlášení si projděte:
 - **Models**: model `nemotron-3-ultra` (z `config.yaml`) [SCREENSHOT: Models]
-- **Virtual Keys**: zatím prázdné, první klíč vytvoříme v kroku 4
+- **Virtual Keys**: zatím prázdné, první klíč vytvoříme v kap. 7.1
 - **Logs**: požadavky z testů výše, včetně neúspěšných [SCREENSHOT: Logs s testovacím requestem]
 - **Usage**: útrata (u free modelu 0 USD) a počty tokenů
 
@@ -998,10 +1003,10 @@ curl -s -o /dev/null -w "%{http_code} -> %{redirect_url}\n" -X POST http://local
 
 | Příznak | Příčina / řešení |
 |---|---|
-| `required variable LITELLM_MASTER_KEY is missing a value: missing in .env` | V `.env` chybí proměnná nebo spouštíte `docker compose` z jiného adresáře. `.env` se čte z aktuálního adresáře. |
+| `required variable LITELLM_MASTER_KEY is missing a value: missing in .env` | V `.env` chybí proměnná nebo spouštíte `docker compose` z jiného adresáře. `.env` se čte z aktuálního adresáře. Pokud je hodnota v `.env` vyplněná, ale chyba trvá, má přednost prázdná proměnná načtená dřív do shellu: `set -a; . ./.env; set +a` nebo nový shell. |
 | `open /opt/ai-stack/.env: permission denied` | `.env` patří rootovi. Opravte: `sudo chown $USER: /opt/ai-stack/.env`. |
 | `litellm` zůstává `starting`/`unhealthy`, v logu `Can't reach database server at postgres:5432` | Postgres ještě nenaběhl nebo nesedí heslo. Pozor: **heslo DB se nastavuje jen při prvním startu prázdného volume.** Pokud jste `POSTGRES_PASSWORD` v `.env` změnili až potom, databáze má pořád staré heslo. V labu lze volume smazat (`docker compose down -v`, **smaže data!**). Jinak změňte heslo v DB přes `ALTER USER`. |
-| `500 … Forbidden control character detected in headers. Potential header injection attack.` | V API klíči v `.env` je neviditelný řídicí znak, typicky escape sekvence po stisku šipky při vkládání nebo `\r` z Windows. Zkontrolujte `LC_ALL=C grep -c '[[:cntrl:]]' .env` a délku klíče (73). Opravte řádek a spusťte `docker compose up -d`. |
+| `500 … Forbidden control character detected in headers. Potential header injection attack.` | V API klíči v `.env` je neviditelný řídicí znak, typicky escape sekvence po stisku šipky při vkládání nebo `\r` z Windows. Zkontrolujte `LC_ALL=C grep -c '[[:cntrl:]]' .env` a délku klíče (73). Klíč zadejte znovu (`./set-env.sh OPENROUTER_API_KEY`) a spusťte `docker compose up -d`. |
 | `401 … Authentication Error` při volání OpenRouteru | Neplatný nebo smazaný OpenRouter klíč. Vytvořte nový. |
 | `401` na `/v1/models` i s klíčem | Chybí `Bearer ` v hlavičce, nebo jste použili jiný klíč než `LITELLM_MASTER_KEY`. Pozor na prázdnou proměnnou, pokud jste nespustili `set -a; . ./.env`. |
 | `429 Too Many Requests` / `rate limit` | Vyčerpán limit free modelů OpenRouteru (20/min, 50/den). Počkejte, nebo použijte jiný účet či klíč. |
@@ -1014,7 +1019,7 @@ curl -s -o /dev/null -w "%{http_code} -> %{redirect_url}\n" -X POST http://local
 
 ---
 
-## 7. Krok 4: Open WebUI
+## 7. Open WebUI
 
 **Účel:** Uživatelé nebudou volat API přes `curl`. Dostanou webové chatovací rozhraní. Open WebUI se připojí k LiteLLM jako k „OpenAI“ serveru, s vlastním **virtual key** a přes **interní Docker síť**.
 
@@ -1041,11 +1046,15 @@ resp=$(curl -s http://localhost:4000/key/generate \
 echo "$resp" | jq -c '{key_alias, models, key_prefix: .key[0:5]}'
 echo "$resp" | jq -r .key | ./set-env.sh OPENWEBUI_LITELLM_KEY
 unset resp
+set -a; . ./.env; set +a          # znovu načíst .env, v shellu je zatím prázdná stará hodnota
 ```
 ```
 {"key_alias":"open-webui","models":["nemotron-3-ultra"],"key_prefix":"sk-Ab"}
 [OK] OPENWEBUI_LITELLM_KEY saved: length 25, starts with "sk-Ab…"
 ```
+
+> [!IMPORTANT]
+> Poslední řádek je nutný: na začátku bloku jste do shellu načetli `.env` ještě s prázdným `OPENWEBUI_LITELLM_KEY`. Proměnná v shellu má u `docker compose` přednost před souborem, takže by `docker compose` v kap. 7.3 klíč neviděl (`required variable OPENWEBUI_LITELLM_KEY is missing a value`). Druhá možnost je otevřít nový shell.
 
 - `"models": ["nemotron-3-ultra"]` omezí klíč jen na tento model. Model přidaný později do `config.yaml` tento klíč automaticky neuvidí.
 - Stejně lze nastavit i `max_budget`, `rpm_limit`, `tpm_limit` nebo `duration` (expirace). Viz [Virtual keys](https://docs.litellm.ai/docs/proxy/virtual_keys).
@@ -1161,7 +1170,7 @@ none
 > - stav ověříte příkazem `curl -s http://localhost:3000/api/config | jq .onboarding`. Hodnota `true` znamená, že admin ještě neexistuje.
 > - Alternativa pro automatizované nasazení: proměnné `WEBUI_ADMIN_EMAIL` a `WEBUI_ADMIN_PASSWORD` vytvoří admina už při startu a registraci vypnou. Viz [First-run bootstrap window](https://docs.openwebui.com/security/accepted-risks/first-run-bootstrap-window).
 
-1. Otevřete `http://<IP_SERVERU>:3000`.
+1. Otevřete `http://<SERVER_IP>:3000`.
 2. Klikněte na **Get started** a vyplňte jméno, e-mail a heslo. E-mail slouží jen jako přihlašovací jméno, nic se na něj neposílá.
    [SCREENSHOT: registrační formulář prvního (admin) účtu]
 3. Po přihlášení zkontrolujte, že v **Admin Panel → Users** máte roli `admin`.
@@ -1174,7 +1183,7 @@ curl -s http://localhost:3000/api/config | jq -c '{version, onboarding, enable_s
 ```
 {"version":"0.12.5","onboarding":null,"enable_signup":false}
 ```
-V referenčním labu byla po registraci admina registrace dalších uživatelů vypnutá (`enable_signup: false`). Studenty pak přidáte ručně (**Admin Panel → Users → +**), nebo registraci zapnete v **Admin Panel → Settings → General**. Díky `DEFAULT_USER_ROLE: pending` je pak budete schvalovat.
+V referenčním labu byla po registraci admina registrace dalších uživatelů vypnutá (`enable_signup: false`). Další uživatele pak přidáte ručně (**Admin Panel → Users → +**), nebo registraci zapnete v **Admin Panel → Settings → General**. Díky `DEFAULT_USER_ROLE: pending` je pak budete schvalovat.
 
 ### 7.6 Ověření: chat přes celý řetězec
 
@@ -1209,7 +1218,7 @@ litellm-1  | INFO:     172.18.0.4:53808 - "POST /v1/chat/completions HTTP/1.1" 2
 {"key_alias":"open-webui","models":["nemotron-3-ultra"],"spend":0.0,"last_active":"2026-11-16T13:10:11.693000+00:00"}
 ```
 
-V Admin UI LiteLLM (`http://<IP_SERVERU>:4000/ui` → **Logs**) je request vidět s klíčem `open-webui`. [SCREENSHOT: LiteLLM Logs s requestem od klíče open-webui]
+V Admin UI LiteLLM (`http://<SERVER_IP>:4000/ui` → **Logs**) je request vidět s klíčem `open-webui`. [SCREENSHOT: LiteLLM Logs s requestem od klíče open-webui]
 
 > [!TIP]
 > **Proč dva požadavky na jeden dotaz?** Open WebUI kromě vlastní odpovědi posílá na pozadí další požadavky na stejný model, např. **vygenerování názvu chatu**, tagů nebo návrhů dalších otázek. Tyto *tasks* se taky počítají do limitů a útraty. U free modelu s limitem 50 požadavků denně je to znát. Lze je vypnout nebo přesměrovat na jiný model v **Admin Panel → Settings → Interface**.
@@ -1231,7 +1240,7 @@ V Admin UI LiteLLM (`http://<IP_SERVERU>:4000/ui` → **Logs**) je request vidě
 
 ---
 
-## 8. Krok 5: Provoz
+## 8. Provoz
 
 Všechny příkazy se spouštějí v adresáři `/opt/ai-stack`:
 ```bash
@@ -1268,6 +1277,9 @@ Logy kontejnerů rotuje Docker podle `x-logging` v compose (3 × 10 MB na kontej
 
 **Postup:** záloha → přečíst release notes → změnit tag → `pull` → `up -d` → ověřit.
 
+> [!NOTE]
+> Na školení update jen probereme, **neprovádějte ho**: část 2 počítá s verzemi image z fází konfigurace (`v1.106.6`, `v0.12.5`). Zálohu (kap. 8.4) naopak udělejte.
+
 ```bash
 cd /opt/ai-stack
 
@@ -1279,7 +1291,7 @@ cd /opt/ai-stack
 #    Hledejte: breaking changes, DB migrace, změny proměnných prostředí.
 
 # 3) změna verze image (příklad LiteLLM)
-sed -i 's|ghcr.io/berriai/litellm:v1.106.6|ghcr.io/berriai/litellm:<NOVÁ_VERZE>|' docker-compose.yml
+sed -i 's|ghcr.io/berriai/litellm:v1.106.6|ghcr.io/berriai/litellm:<NEW_VERSION>|' docker-compose.yml
 grep "image:" docker-compose.yml
 
 # 4) stažení a nasazení
@@ -1292,7 +1304,7 @@ docker compose logs --tail 50 litellm
 curl -s http://localhost:4000/health/readiness | jq '{status, db}'
 ```
 
-**Očekávaný výstup kroku 4:**
+**Očekávaný výstup bodu 4:**
 ```
  Container ai-stack-litellm-1 Recreate
  Container ai-stack-litellm-1 Recreated

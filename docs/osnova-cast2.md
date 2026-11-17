@@ -38,7 +38,7 @@ Každý krok v návodu: co a proč, příkaz, očekávaný výstup, ověření, 
 - koncept: `pre_call` / `post_call` / `during_call`, `default_on`, zapnutí per klíč / per request, fail-open vs. fail-closed
 - **vestavěný content filter** LiteLLM (`litellm_content_filter`): blokovaná slova, regex (platební karty, rodná čísla, API klíče), blokovat vs. maskovat
 - **PromptGuard** (`guardrail: promptguard`, SaaS, free tier 5 USD/měsíc): prompt injection, jailbreak, PII, secrets, data exfiltration
-- Open WebUI Filter functions jako doplňková vrstva – srovnání s guardraily na gatewayi
+- Open WebUI Filter functions jako doplňková vrstva – srovnání s guardraily na gateway
 - prompt injection: ukázka útoku, co guardrail zachytí a co ne
 - *(Presidio vyřazeno)*
 - **Lab:** zablokovat odeslání „tajných“ dat, maskovat PII, zachytit prompt injection, ověřit v logu
@@ -59,7 +59,7 @@ Každý krok v návodu: co a proč, příkaz, očekávaný výstup, ověření, 
 ## Modul G: Lokální model přes AI gateway (fáze `5-local-model`)
 - sdílený model server (lektor): Ollama + Qwen3 4B Instruct na CPU, Caddy s API klíčem (`docs/model-server.md`)
 - LiteLLM: `ollama_chat/`, `api_base`, `api_key`, `think: false`, nulová cena, alias `qwen-local`
-- guardrails a fallbacky u lokálního modelu (kam smí data odejít)
+- guardraily a fallbacky u lokálního modelu (kam smí data odejít)
 - Open WebUI: virtual key, viditelnost, vypnutí Builtin Tools (jinak ~7 000 tokenů promptu na zprávu), úlohy na pozadí
 - srovnání cloud vs. lokální model (rychlost, kvalita, cena, data)
 - **Lab:** připojit `qwen-local`, chat přes `curl` i Open WebUI, ověřit spend 0 a guardrail

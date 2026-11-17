@@ -86,7 +86,7 @@ Naměřeno v referenčním labu, 2 vCPU, `qwen3:4b-instruct`, bez dalšího zat�
 
 Na 8 vCPU počítejte zhruba s 2–3× vyšší rychlostí (generování na CPU omezuje hlavně propustnost paměti, ne počet jader). **Před školením změřte** ([kap. 5.4](#54-zátěžový-test-před-školením)). Pro představu: na GPU (např. třídy RTX 4090) generuje model této velikosti řádově 100+ tokenů/s.
 
-> **Co z toho plyne pro školení:** Lokální model na CPU je ukázka principu (data neopouštějí firmu, nulová cena za token, stejné API za gatewayí), ne náhrada cloudového modelu. Krátké dotazy, žádné dlouhé dokumenty. Coding agenti (Claude Code, Codex) s takovým modelem prakticky nepracují: posílají desítky tisíc tokenů kontextu.
+> **Co z toho plyne pro školení:** Lokální model na CPU je ukázka principu (data neopouštějí firmu, nulová cena za token, stejné API za gateway), ne náhrada cloudového modelu. Krátké dotazy, žádné dlouhé dokumenty. Coding agenti (Claude Code, Codex) s takovým modelem prakticky nepracují: posílají desítky tisíc tokenů kontextu.
 
 ---
 
@@ -125,8 +125,8 @@ Postup předpokládá čistou VM s Ubuntu 24.04, běžného uživatele se `sudo`
 Parametry (model, počet slotů, kontext, `KEEP_ALIVE`, povolené sítě) lze zadat třemi způsoby: upravit blok `Settings` na začátku skriptu, předat přepínači (`--model`, `--parallel`, `--context`, `--keep-alive`, `--allow-cidr`), nebo je skript při spuštění v terminálu sám vyžádá (Enter = ponechat nabídnutou hodnotu). Při opakovaném spuštění nabídne hodnoty uložené v `.env`.
 
 ```bash
-scp deploy/local-llm/setup-model-server.sh <uzivatel>@<IP_MODEL_SERVERU>:
-ssh <uzivatel>@<IP_MODEL_SERVERU>
+scp deploy/local-llm/setup-model-server.sh <USER>@<MODEL_SERVER_IP>:
+ssh <USER>@<MODEL_SERVER_IP>
 sudo ./setup-model-server.sh                       # interaktivně
 sudo ./setup-model-server.sh --allow-cidr 192.0.2.0/24 --yes   # bez dotazů, s omezením portu
 ```
@@ -139,7 +139,7 @@ Očekávaný konec výstupu:
   [OK] Answer: Hlavním městem Česka je Praha.
   [OK] Parallel slots: n_slots = 4
 ...
-  LOCAL_LLM_API_BASE=http://<IP_MODEL_SERVERU>:11434
+  LOCAL_LLM_API_BASE=http://<MODEL_SERVER_IP>:11434
   LOCAL_LLM_API_KEY=(hidden – show: sudo grep LOCAL_LLM_API_KEY /opt/local-llm/.env)
   model in config.yaml: ollama_chat/qwen3:4b-instruct
 ```
@@ -147,7 +147,7 @@ Očekávaný konec výstupu:
 | Přepínač | Účel |
 |---|---|
 | `--yes` | bez dotazů (hodnoty z přepínačů, `.env` nebo bloku `Settings`) |
-| `--allow-cidr <sítě>` | povolí port 11434 jen z uvedených sítí (pravidla v `DOCKER-USER`, trvale přes systemd unit `local-llm-firewall.service`); `none` = firewall neměnit (výchozí) |
+| `--allow-cidr <CIDR>` | povolí port 11434 jen z uvedených sítí (pravidla v `DOCKER-USER`, trvale přes systemd unit `local-llm-firewall.service`); `none` = firewall neměnit (výchozí) |
 | `--new-key` | vygeneruje nový `LOCAL_LLM_API_KEY` a restartuje Caddy (výměna klíče po školení) |
 | `--show-key` | vypíše klíč v souhrnu (jinak se nikde nezobrazí ani nezaloguje) |
 | `--skip-upgrade`, `--no-model` | přeskočí `apt upgrade` / stažení a zahřátí modelu |
@@ -159,7 +159,7 @@ Log běhu: `/var/log/local-llm-setup.log` (práva 600, bez klíče).
 
 ### 4.1 Docker
 
-Stejně jako na VM účastníků: [část 1, kap. 4 a 5](navod.md#4-krok-1-příprava-systému) (aktualizace systému, Docker z oficiálního repozitáře s ověřením GPG klíče, skupina `docker`). `prepare.sh` sem **nepoužívejte**, ten připravuje AI stack, ne model server (pro model server je `setup-model-server.sh`, kap. 4.0).
+Stejně jako na VM účastníků: [část 1, kap. 4 a 5](navod.md#4-příprava-systému) (aktualizace systému, Docker z oficiálního repozitáře s ověřením GPG klíče, skupina `docker`). `prepare.sh` sem **nepoužívejte**, ten připravuje AI stack, ne model server (pro model server je `setup-model-server.sh`, kap. 4.0).
 
 Ověření:
 ```bash
@@ -271,13 +271,13 @@ Stažení 2,5 GB trvalo v referenčním labu necelou minutu. Model je uložený 
 Načtěte si klíč do shellu (po testech shell zavřete):
 ```bash
 set -a; . ./.env; set +a
-IP=$(hostname -I | awk '{print $1}')
+MODEL_SERVER_IP=$(hostname -I | awk '{print $1}')
 ```
 
 **1. Bez klíče a se špatným klíčem → 401:**
 ```bash
-curl -s -o /dev/null -w "%{http_code}\n" http://$IP:11434/api/tags
-curl -s -w " %{http_code}\n" -H "Authorization: Bearer spatny" http://$IP:11434/api/tags
+curl -s -o /dev/null -w "%{http_code}\n" http://$MODEL_SERVER_IP:11434/api/tags
+curl -s -w " %{http_code}\n" -H "Authorization: Bearer spatny" http://$MODEL_SERVER_IP:11434/api/tags
 ```
 ```
 401
@@ -286,7 +286,7 @@ curl -s -w " %{http_code}\n" -H "Authorization: Bearer spatny" http://$IP:11434/
 
 **2. S klíčem → seznam modelů:**
 ```bash
-curl -s -H "Authorization: Bearer $LOCAL_LLM_API_KEY" http://$IP:11434/api/tags | jq -r '.models[].name'
+curl -s -H "Authorization: Bearer $LOCAL_LLM_API_KEY" http://$MODEL_SERVER_IP:11434/api/tags | jq -r '.models[].name'
 ```
 ```
 qwen3:4b-instruct
@@ -294,7 +294,7 @@ qwen3:4b-instruct
 
 **3. Chat a rychlost** (první volání zahrnuje načtení modelu do RAM):
 ```bash
-curl -s -H "Authorization: Bearer $LOCAL_LLM_API_KEY" http://$IP:11434/api/chat -d '{
+curl -s -H "Authorization: Bearer $LOCAL_LLM_API_KEY" http://$MODEL_SERVER_IP:11434/api/chat -d '{
   "model": "qwen3:4b-instruct", "stream": false, "think": false,
   "messages": [{"role": "user", "content": "Jaké je hlavní město Česka? Odpověz jednou větou."}]
 }' | jq -c '{c: .message.content, load_s: (.load_duration/1e9|round),
@@ -339,7 +339,7 @@ Pravidla nepřežijí restart (trvale přes `iptables-persistent` nebo skript po
 
 | Hodnota | Kam ji účastník zapíše |
 |---|---|
-| `http://<IP_MODEL_SERVERU>:11434` | `LOCAL_LLM_API_BASE` v `/opt/ai-stack/.env` |
+| `http://<MODEL_SERVER_IP>:11434` | `LOCAL_LLM_API_BASE` v `/opt/ai-stack/.env` |
 | `LOCAL_LLM_API_KEY` | `LOCAL_LLM_API_KEY` v `/opt/ai-stack/.env` |
 | název modelu `qwen3:4b-instruct` | už je v konfiguraci fáze `5-local-model` (`ollama_chat/qwen3:4b-instruct`) |
 
@@ -365,9 +365,9 @@ top -bn1 | head -12                                               # llama-server
 
 Simulace 8 účastníků najednou (krátké odpovědi, `num_predict` omezuje délku):
 ```bash
-set -a; . ./.env; set +a; IP=$(hostname -I | awk '{print $1}')
+set -a; . ./.env; set +a; MODEL_SERVER_IP=$(hostname -I | awk '{print $1}')
 time (for i in $(seq 1 8); do
-  curl -s -H "Authorization: Bearer $LOCAL_LLM_API_KEY" http://$IP:11434/api/chat -d '{
+  curl -s -H "Authorization: Bearer $LOCAL_LLM_API_KEY" http://$MODEL_SERVER_IP:11434/api/chat -d '{
     "model":"qwen3:4b-instruct","stream":false,"options":{"num_predict":100},
     "messages":[{"role":"user","content":"Napiš krátký odstavec o Praze."}]}' \
   | jq -c '{tok_s:(.eval_count/(.eval_duration/1e9)*10|round/10), total_s:(.total_duration/1e9|round)}' &
@@ -381,13 +381,13 @@ Výsledek zapište do přehledu školení. Pokud poslední request trvá déle n
 docker compose exec ollama ollama pull qwen3:8b       # nový model
 docker compose exec ollama ollama rm qwen3:4b-instruct # starý (uvolní disk)
 ```
-Na gatewayích pak změnit `model:` v `config.yaml` a `docker compose restart litellm`.
+Na gateway účastníků pak změnit `model:` v `config.yaml` a `docker compose restart litellm`.
 
 Update Ollamy: v `docker-compose.yml` změnit tag (verze ≥ 2 týdny stará, [releases](https://github.com/ollama/ollama/releases)), `docker compose pull && docker compose up -d`. Modely ve volume zůstanou.
 
 ---
 
-## 6. Troubleshooting
+## 6. Řešení problémů
 
 | Příznak | Příčina | Řešení |
 |---|---|---|

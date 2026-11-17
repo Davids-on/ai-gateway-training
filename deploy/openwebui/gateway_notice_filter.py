@@ -28,12 +28,12 @@ class Filter:
             description="Regex – a user message matching it is rejected",
         )
         block_message: str = Field(
-            default="Zpráva obsahuje rodné číslo. Osobní údaje do AI neposílejte – odstraňte je a zkuste to znovu.",
-            description="Message shown to the user when the message is rejected",
+            default="The message contains a Czech birth number. Do not send personal data to AI – remove it and try again.",
+            description="Message shown to the user when the message is rejected (set your own language here)",
         )
         disclaimer: str = Field(
-            default="_Odpověď vygenerovala AI. Před použitím ji ověřte._",
-            description="Text appended to every answer (empty = off)",
+            default="_AI-generated answer – verify it before use._",
+            description="Text appended to every answer (empty = off; set your own language here)",
         )
 
     def __init__(self):
