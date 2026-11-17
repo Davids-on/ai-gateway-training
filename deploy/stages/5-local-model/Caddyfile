@@ -1,0 +1,40 @@
+# Caddy – HTTPS reverse proxy for the AI stack (/opt/ai-stack/Caddyfile)
+# Docs: https://caddyserver.com/docs/caddyfile
+#
+#   https://<SERVER_IP>        -> Open WebUI  (open-webui:8080)
+#   https://<SERVER_IP>:8443   -> LiteLLM     (litellm:4000, API /v1 + Admin UI /ui)
+#
+# Certificates come from Caddy's own internal CA ("tls internal"). Its root
+# certificate lives in the caddy-data volume (pki/authorities/local/root.crt)
+# and must be imported as trusted on every client. Caddy renews the leaf
+# certificates automatically.
+#
+# SERVER_IP is passed in by docker-compose.yml from .env.
+
+{
+	# Clients connecting to an IP address send no SNI – tell Caddy which
+	# certificate to present in that case.
+	default_sni {$SERVER_IP}
+	# Do not try to install the root CA into the container's trust store.
+	skip_install_trust
+	# No public ACME (Let's Encrypt) – the lab is not reachable from the internet.
+	local_certs
+	# No automatic HTTP->HTTPS redirect listener on port 80.
+	auto_https disable_redirects
+}
+
+# --- Open WebUI ---------------------------------------------------------------
+https://{$SERVER_IP} {
+	tls internal
+	reverse_proxy open-webui:8080
+}
+
+# --- LiteLLM (API for clients: Claude Code, Claude Desktop, Codex, SDKs) --------
+https://{$SERVER_IP}:8443 {
+	tls internal
+	reverse_proxy litellm:4000 {
+		# Stream responses (SSE) to the client immediately, no buffering.
+		# Long agent turns and Claude Desktop compaction rely on this.
+		flush_interval -1
+	}
+}

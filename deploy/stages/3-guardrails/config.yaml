@@ -1,0 +1,133 @@
+# LiteLLM Proxy – STAGE 3-guardrails: part 2, module E – + guardrails
+# Location on the server: /opt/ai-stack/config.yaml
+# Docs: https://docs.litellm.ai/docs/proxy/configs
+#
+# Values of the form "os.environ/NAME" are read by LiteLLM from the container's
+# environment variable, which docker-compose.yml passes in from the .env file.
+# This file therefore contains no secrets and is safe to keep in version control.
+
+model_list:
+  # model_name = public model name that clients see (Open WebUI, curl).
+  # The provider behind it can be swapped at any time without changing clients.
+  - model_name: nemotron-3-ultra
+    litellm_params:
+      # prefix "openrouter/" = provider, the rest = model ID on OpenRouter
+      model: openrouter/nvidia/nemotron-3-ultra-550b-a55b:free
+      api_key: os.environ/OPENROUTER_API_KEY
+    model_info:
+      description: "NVIDIA Nemotron 3 Ultra via OpenRouter (free tier)"
+
+  # --- Anthropic (direct provider, part 2 of the training) ---
+  # model_name = the real Anthropic model ID. Claude Code and Claude Desktop
+  # recognise Claude models by their ID (context window, picker, effort), so we
+  # do not invent aliases for them.
+  - model_name: claude-opus-5-5
+    litellm_params:
+      model: anthropic/claude-opus-5-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+    model_info:
+      description: "Claude Opus 5.5 – Anthropic, most capable"
+  - model_name: claude-sonnet-5-5
+    litellm_params:
+      model: anthropic/claude-sonnet-5-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+    model_info:
+      description: "Claude Sonnet 5.5 – Anthropic, balanced"
+  - model_name: claude-haiku-5-5
+    litellm_params:
+      model: anthropic/claude-haiku-5-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+    model_info:
+      description: "Claude Haiku 5.5 – Anthropic, fast and cheap"
+
+litellm_settings:
+  # Maximum time to wait for the provider's response (s). The default is very high.
+  request_timeout: 600
+  # Silently drop request parameters the target model does not support instead
+  # of failing the request. Example: Claude 5.5 models accept only
+  # temperature=1, but Open WebUI users can set any temperature in chat controls.
+  drop_params: true
+  # Fallbacks: if a call to the model on the left fails (after retries),
+  # LiteLLM transparently retries it on the models on the right, in order.
+  # The free OpenRouter tier is often rate-limited -> fall back to Claude Haiku.
+  fallbacks:
+    - nemotron-3-ultra: ["claude-haiku-5-5"]
+    - claude-opus-5-5: ["claude-sonnet-5-5"]
+  # Retries on the same model before a fallback is used.
+  num_retries: 2
+
+# --- Guardrails (part 2, module E) ---
+# Docs: https://docs.litellm.ai/docs/proxy/guardrails/quick_start
+# mode:       pre_call = check the prompt before it reaches the provider
+#             post_call = check the model's answer before it reaches the client
+# default_on: true = applies to every request; false = only when requested
+#             per request ("guardrails": [...] in the body) or per key/team.
+guardrails:
+  # 1) Built-in content filter – secrets and payment data never leave the company.
+  - guardrail_name: secrets-block
+    litellm_params:
+      guardrail: litellm_content_filter
+      mode: pre_call
+      default_on: true
+      patterns:
+        - pattern_type: prebuilt
+          pattern_name: credit_card
+          action: BLOCK
+        - pattern_type: prebuilt
+          pattern_name: iban
+          action: BLOCK
+        - pattern_type: prebuilt
+          pattern_name: aws_access_key
+          action: BLOCK
+        - pattern_type: prebuilt
+          pattern_name: github_token
+          action: BLOCK
+        # Our own secrets: LiteLLM keys and Anthropic / OpenRouter API keys
+        - pattern_type: regex
+          name: provider_api_key
+          pattern: '\b(sk-ant-[A-Za-z0-9_-]{20,}|sk-or-v1-[a-f0-9]{20,})'
+          action: BLOCK
+      blocked_words:
+        - keyword: "PŘÍSNĚ TAJNÉ"
+          action: BLOCK
+          description: "Document classification label – must not be sent to an external AI"
+
+  # 2) Built-in content filter – personal data is masked, the request goes through.
+  #    Not on by default (it would rewrite e-mails in source code for coding
+  #    agents); enabled per key / team, e.g. for Open WebUI.
+  - guardrail_name: pii-mask
+    litellm_params:
+      guardrail: litellm_content_filter
+      mode: pre_call
+      default_on: false
+      patterns:
+        - pattern_type: prebuilt
+          pattern_name: email
+          action: MASK
+        # Czech birth number (rodné číslo) in the common form 123456/7890
+        - pattern_type: regex
+          name: cz_birth_number
+          pattern: '\b\d{6}/\d{3,4}\b'
+          action: MASK
+
+  # 3) PromptGuard (external SaaS, https://promptguard.co) – prompt injection,
+  #    jailbreak, PII, secrets, data exfiltration.
+  #    block_on_error: true = fail-closed (PromptGuard unreachable -> request blocked)
+  - guardrail_name: promptguard
+    litellm_params:
+      guardrail: promptguard
+      mode: pre_call
+      api_key: os.environ/PROMPTGUARD_API_KEY
+      block_on_error: true
+      default_on: false
+
+general_settings:
+  # Proxy admin key. Virtual keys do not work without it (and without the DB).
+  master_key: os.environ/LITELLM_MASTER_KEY
+  # PostgreSQL connection (virtual keys, users, spend tracking, logs).
+  database_url: os.environ/DATABASE_URL
+  # Do not trust X-Forwarded-For. Behind Caddy (part 2, module F0) LiteLLM
+  # therefore logs Caddy's container IP instead of the real client IP.
+  # Enable "use_x_forwarded_for: true" only once port 4000 is no longer
+  # published directly – otherwise any client could spoof its IP via the header.
+  trusted_proxy_ranges: []

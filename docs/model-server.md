@@ -118,9 +118,48 @@ Stanice účastníků přímý přístup na 11434 nepotřebují: všechno jde p�
 
 Postup předpokládá čistou VM s Ubuntu 24.04, běžného uživatele se `sudo` a přístup přes SSH.
 
+### 4.0 Rychlá cesta: skript `setup-model-server.sh`
+
+**Co a proč:** Celou přípravu z kap. 4.1–4.6 (Docker, `/opt/local-llm`, `.env` s vygenerovaným klíčem, spuštění, stažení a zahřátí modelu, ověření 401/200, volitelně omezení portu) udělá jeden samostatný skript [`deploy/local-llm/setup-model-server.sh`](../deploy/local-llm/setup-model-server.sh). `docker-compose.yml` a `Caddyfile` má v sobě, na VM tedy stačí zkopírovat jen tento soubor. Ruční postup níže zůstává jako vysvětlení, co skript dělá.
+
+Parametry (model, počet slotů, kontext, `KEEP_ALIVE`, povolené sítě) lze zadat třemi způsoby: upravit blok `Settings` na začátku skriptu, předat přepínači (`--model`, `--parallel`, `--context`, `--keep-alive`, `--allow-cidr`), nebo je skript při spuštění v terminálu sám vyžádá (Enter = ponechat nabídnutou hodnotu). Při opakovaném spuštění nabídne hodnoty uložené v `.env`.
+
+```bash
+scp deploy/local-llm/setup-model-server.sh <uzivatel>@<IP_MODEL_SERVERU>:
+ssh <uzivatel>@<IP_MODEL_SERVERU>
+sudo ./setup-model-server.sh                       # interaktivně
+sudo ./setup-model-server.sh --allow-cidr 192.0.2.0/24 --yes   # bez dotazů, s omezením portu
+```
+
+Očekávaný konec výstupu:
+```
+  [OK] Without the key: HTTP 401
+  [OK] Wrong key: HTTP 401
+  [OK] With the key: HTTP 200
+  [OK] Answer: Hlavním městem Česka je Praha.
+  [OK] Parallel slots: n_slots = 4
+...
+  LOCAL_LLM_API_BASE=http://<IP_MODEL_SERVERU>:11434
+  LOCAL_LLM_API_KEY=(hidden – show: sudo grep LOCAL_LLM_API_KEY /opt/local-llm/.env)
+  model in config.yaml: ollama_chat/qwen3:4b-instruct
+```
+
+| Přepínač | Účel |
+|---|---|
+| `--yes` | bez dotazů (hodnoty z přepínačů, `.env` nebo bloku `Settings`) |
+| `--allow-cidr <sítě>` | povolí port 11434 jen z uvedených sítí (pravidla v `DOCKER-USER`, trvale přes systemd unit `local-llm-firewall.service`); `none` = firewall neměnit (výchozí) |
+| `--new-key` | vygeneruje nový `LOCAL_LLM_API_KEY` a restartuje Caddy (výměna klíče po školení) |
+| `--show-key` | vypíše klíč v souhrnu (jinak se nikde nezobrazí ani nezaloguje) |
+| `--skip-upgrade`, `--no-model` | přeskočí `apt upgrade` / stažení a zahřátí modelu |
+
+Log běhu: `/var/log/local-llm-setup.log` (práva 600, bez klíče).
+
+> **Referenční lab:** Skript ověřen opakovaným spuštěním nad existujícím `/opt/local-llm` (`--skip-upgrade --yes`): konfigurace beze změny, kontejnery se nerestartovaly, 401/401/200, odpověď modelu, `n_slots = 2`. Krok s firewallem (`--allow-cidr`) v labu **neověřen** (stejně jako kap. 4.6). Na čisté VM ve školení skript projde i instalací Dockeru (stejný kód jako `deploy/prepare.sh`).
+
+
 ### 4.1 Docker
 
-Stejně jako na VM účastníků: [část 1, kap. 4 a 5](navod.md#4-krok-1-příprava-systému) (aktualizace systému, Docker z oficiálního repozitáře s ověřením GPG klíče, skupina `docker`). `prepare.sh` sem **nepoužívejte**, ten připravuje AI stack, ne model server.
+Stejně jako na VM účastníků: [část 1, kap. 4 a 5](navod.md#4-krok-1-příprava-systému) (aktualizace systému, Docker z oficiálního repozitáře s ověřením GPG klíče, skupina `docker`). `prepare.sh` sem **nepoužívejte**, ten připravuje AI stack, ne model server (pro model server je `setup-model-server.sh`, kap. 4.0).
 
 Ověření:
 ```bash
@@ -136,7 +175,7 @@ docker run --rm hello-world | grep -m1 Hello
 sudo install -d -o "$USER" -g "$USER" -m 750 /opt/local-llm
 cd /opt/local-llm
 # zkopírujte sem z repozitáře deploy/local-llm/: docker-compose.yml, Caddyfile, .env.example
-cp ~/ai-stack-deploy/local-llm/{docker-compose.yml,Caddyfile,.env.example} .
+cp ~/ai-gateway-training/deploy/local-llm/{docker-compose.yml,Caddyfile,.env.example} .
 ```
 
 Vytvoření `.env` s vygenerovaným klíčem (klíč se nevypíše na obrazovku):
@@ -302,11 +341,11 @@ Pravidla nepřežijí restart (trvale přes `iptables-persistent` nebo skript po
 |---|---|
 | `http://<IP_MODEL_SERVERU>:11434` | `LOCAL_LLM_API_BASE` v `/opt/ai-stack/.env` |
 | `LOCAL_LLM_API_KEY` | `LOCAL_LLM_API_KEY` v `/opt/ai-stack/.env` |
-| název modelu `qwen3:4b-instruct` | už je v `deploy/config.yaml` (`ollama_chat/qwen3:4b-instruct`) |
+| název modelu `qwen3:4b-instruct` | už je v konfiguraci fáze `5-local-model` (`ollama_chat/qwen3:4b-instruct`) |
 
 Klíč je **společný pro všechny**. Rozdávejte ho stejným kanálem jako ostatní klíče (kap. 4 přehledu), ne na projektoru. Kdo klíč zná, může model volat i mimo gateway. Proto v produkci model server patří do sítě, kam vidí jen gateway (kap. 4.6).
 
-Pokud ve školení použijete jiný model, upravte před školením `model:` u `qwen-local` v [`deploy/config.yaml`](../deploy/config.yaml). Alias `qwen-local` zůstává, klienti nic nemění.
+Pokud ve školení použijete jiný model, upravte před školením `model:` u `qwen-local` v [`deploy/stages/5-local-model/config.yaml`](../deploy/stages/5-local-model/config.yaml) a spusťte `python3 deploy/stages/build-stages.py` (lokální model je jen v této fázi, ostatní se nezmění). Alias `qwen-local` zůstává, klienti nic nemění.
 
 ### 5.2 Před začátkem modulu: zahřátí
 

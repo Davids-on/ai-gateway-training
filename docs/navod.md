@@ -6,6 +6,13 @@
 > - Příkazy se spouštějí na serveru jako běžný uživatel se sudo.
 > - `<IP_SERVERU>` nahraďte IP adresou své VM. V referenčním labu je to `192.0.2.10`.
 > - Hodnoty ve tvaru `<NĚCO>` jsou placeholdery. Skutečná tajemství do návodu ani do gitu nikdy nepatří.
+> - Repozitář školení je na serveru naklonovaný v `~/ai-gateway-training` (kap. 6.1).
+
+> [!TIP]
+> **Jak s návodem pracovat**
+> - **Hlavní text** je jádro: krok za krokem co a proč děláme, příkaz, očekávaný výstup a ověření. Na školení ho procházíme společně a stačí k dokončení labu.
+> - **📘 Samostudium:** sbalené bloky s pozadím, alternativami a poznámkami pro produkci. Rozbalíte je kliknutím. Lektor je na školení probere podle času.
+> - **🔧 Řešení problémů:** sbalené tabulky na konci kapitol. Otevřete je, když něco nefunguje.
 
 **Obsah:**
 1. [Úvod](#1-úvod)
@@ -19,11 +26,11 @@
 9. [Bezpečnostní poznámky](#9-bezpečnostní-poznámky)
 10. [Další kroky](#10-další-kroky)
 11. [Odkazy](#11-odkazy)
-12. [Příloha A: Automatická příprava serveru (`prepare.sh`)](#12-příloha-a-automatická-příprava-serveru-preparesh)
 
-Hotové konfigurační soubory jsou v repozitáři v adresáři [`deploy/`](../deploy/). Komentáře v nich jsou anglicky, ukázky v návodu mají pro přehlednost komentáře česky. Všechny příkazy použité při přípravě referenčního labu jsou v [`command-log.md`](command-log.md).
+Konfigurační soubory jsou v repozitáři v adresáři [`deploy/stages/`](../deploy/stages/), rozdělené do **fází** podle postupu školení: část 1 používá fázi `1-base`, každý další modul části 2 přidá další fázi. Komentáře v souborech jsou anglicky, ukázky v návodu mají pro přehlednost komentáře česky. Všechny příkazy použité při přípravě referenčního labu jsou v [`command-log.md`](command-log.md).
 
-> **Zkratka pro lektora:** Kroky 1–3 (kapitoly 4–6 až po stažení image) umí provést skript [`deploy/prepare.sh`](../deploy/prepare.sh). Hodí se k přípravě VM před školením, aby se ~9 GB image nestahovalo až na místě. Viz [Příloha A](#12-příloha-a-automatická-příprava-serveru-preparesh).
+> [!NOTE]
+> **VM připravená lektorem:** Kroky kapitol 4–6 (systém, Docker, konfigurace, tajemství, stažení ~9 GB image) umí předem provést skript [`deploy/prepare.sh`](../deploy/prepare.sh) ([příprava serveru pro lektora](priprava-serveru.md)). Pokud vám lektor VM takto připravil, kapitoly 4 a 5 jen projděte a ověřte a v kapitole 6 sledujte rámečky **„VM připravená skriptem“**.
 
 ---
 
@@ -89,7 +96,7 @@ Tok požadavku: uživatel napíše dotaz v Open WebUI → Open WebUI ho pošle n
 | OS | Ubuntu Server 24.04 LTS (čistá instalace) |
 | CPU / RAM / disk | 2 vCPU / 8 GB / 40 GB SSD |
 | Přístup | SSH, uživatel s právy `sudo` |
-| Síť | přístup na internet (apt repozitáře, `download.docker.com`, `ghcr.io`, Docker Hub, `openrouter.ai`) |
+| Síť | přístup na internet (apt repozitáře, `download.docker.com`, `ghcr.io`, Docker Hub, `openrouter.ai`, `huggingface.co`) |
 
 > Model běží v cloudu, takže VM nepotřebuje GPU. Největší nároky má Open WebUI (image kolem 4 GB, za běhu 1–2 GB RAM). Referenční lab běžel i se 4 GB RAM a swapem, ale 8 GB je pohodlnější.
 
@@ -177,10 +184,10 @@ Pokud je nainstalovaný `docker.io` z Ubuntu nebo snap `docker`, odstraňte ho p
 ### 3.3 Obsazené porty
 
 ```bash
-sudo ss -tlnp | grep -E ":(3000|4000|5432)\b" || echo ports-free
+sudo ss -tlnp | grep -E ":(3000|4000|5432|443|8443)\b" || echo ports-free
 ```
 
-**Očekáváno:** `ports-free`. Pokud port něco drží, poslední sloupec ukáže proces. Buď ho zastavte, nebo později v compose změňte port na hostu.
+**Očekáváno:** `ports-free`. Porty 443 a 8443 bude v části 2 potřebovat reverse proxy Caddy (HTTPS). Pokud port něco drží, poslední sloupec ukáže proces. Buď ho zastavte, nebo později v compose změňte port na hostu.
 
 ### 3.4 Firewall
 
@@ -209,13 +216,16 @@ https://openrouter.ai/api/v1/models           -> 200
 ```
 `401` u registrů je **v pořádku**. Registry odpovídá a jen požaduje token, který si Docker sám vyžádá.
 
-### Troubleshooting
+<details>
+<summary>🔧 Řešení problémů</summary>
 
 | Příznak | Příčina / řešení |
 |---|---|
 | `000` u všech URL | Nefunguje DNS nebo výchozí brána: `resolvectl status`, `ip route`. Ve firemní síti může být nutná HTTP proxy. |
 | `000` jen u některých | Blokuje to firewall nebo proxy v síti. Požádejte správce sítě o povolení domén. |
 | `sudo: a password is required` | Uživatel nemá sudo bez hesla. Spouštějte `sudo` interaktivně. |
+
+</details>
 
 ---
 
@@ -239,6 +249,7 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get -y \
 ... upgraded, ... newly installed, 0 to remove and 3 not upgraded.
 ```
 
+> [!NOTE]
 > Hláška „*N not upgraded*“ je u Ubuntu 24.04 běžná. Jde o **phased updates**: Canonical vydává některé aktualizace postupně jen části strojů. Takové balíčky se doinstalují samy později. Nevynucujte je.
 
 **Restart, pokud je potřeba:**
@@ -270,7 +281,7 @@ System clock synchronized: yes
 ### 4.3 Základní nástroje
 
 ```bash
-sudo DEBIAN_FRONTEND=noninteractive apt-get -y install curl jq ca-certificates gnupg openssl
+sudo DEBIAN_FRONTEND=noninteractive apt-get -y install curl jq ca-certificates gnupg openssl git
 ```
 
 | Nástroj | K čemu ho potřebujeme |
@@ -280,15 +291,17 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get -y install curl jq ca-certificates g
 | `ca-certificates` | ověřování HTTPS certifikátů (apt repozitář Dockeru, OpenRouter) |
 | `gnupg` | práce s GPG klíči apt repozitářů |
 | `openssl` | generování náhodných tajemství (master key, salt key) |
+| `git` | stažení repozitáře školení s konfiguračními soubory |
 
 **Ověření:**
 ```bash
-curl --version | head -1; jq --version; openssl version
+curl --version | head -1; jq --version; openssl version; git --version
 ```
 ```
 curl 8.5.0 (x86_64-pc-linux-gnu) ...
 jq-1.7
 OpenSSL 3.0.13 30 Jan 2024 ...
+git version 2.43.0
 ```
 
 ### 4.4 Lokální firewall
@@ -300,13 +313,20 @@ sudo ufw status          # na čisté instalaci: Status: inactive
 sudo ufw disable         # jen pokud je aktivní
 ```
 
-> ⚠️ **Docker a ufw:** I se zapnutým `ufw` by porty publikované Dockerem (`ports:` v compose) byly z ostatních počítačů **stejně dostupné**. Docker si zapisuje vlastní pravidla do iptables/nftables (chain `DOCKER`) a ta se vyhodnocují dřív než pravidla ufw. Pro produkci proto:
+<details>
+<summary>📘 Samostudium: proč Docker obchází <code>ufw</code></summary>
+
+> [!WARNING]
+> **Docker a ufw:** I se zapnutým `ufw` by porty publikované Dockerem (`ports:` v compose) byly z ostatních počítačů **stejně dostupné**. Docker si zapisuje vlastní pravidla do iptables/nftables (chain `DOCKER`) a ta se vyhodnocují dřív než pravidla ufw. Pro produkci proto:
 > - publikujte porty jen na konkrétní IP, např. `127.0.0.1:4000:4000`, a ven vystavte pouze reverse proxy;
 > - nebo filtrujte v chainu `DOCKER-USER`, případně na síťovém firewallu před serverem.
 >
 > Viz [Docker docs – Packet filtering and firewalls](https://docs.docker.com/engine/network/packet-filtering-firewalls/).
 
-### Troubleshooting
+</details>
+
+<details>
+<summary>🔧 Řešení problémů</summary>
 
 | Příznak | Příčina / řešení |
 |---|---|
@@ -314,17 +334,24 @@ sudo ufw disable         # jen pokud je aktivní
 | `apt-get update` hlásí `Temporary failure resolving` | Nefunguje DNS: `resolvectl status`. |
 | `System clock synchronized: no` i po několika minutách | NTP (UDP 123) je blokované. Nastavte interní NTP server (např. DC) v `/etc/systemd/timesyncd.conf` → `NTP=...` a spusťte `sudo systemctl restart systemd-timesyncd`. |
 
+</details>
+
 ---
 
 ## 5. Krok 2: Docker Engine a Docker Compose
 
 **Účel:** Celý AI stack poběží v kontejnerech. Instalujeme **Docker Engine z oficiálního apt repozitáře Dockeru**, ne balíček `docker.io` z Ubuntu ani snap.
 
+<details>
+<summary>📘 Samostudium: proč ne <code>docker.io</code> ani snap</summary>
+
 | Zdroj | Proč ho nepoužijeme |
 |---|---|
 | `docker.io` (Ubuntu) | Starší verze. Compose plugin bývá zastaralý nebo chybí. |
 | `snap install docker` | Omezení confinementu (přístup do `/opt`, bind mounty), jiné cesty a jiné chování při aktualizacích. |
 | **`download.docker.com`** | Aktuální verze přímo od Dockeru včetně pluginů `compose` a `buildx`. Tento postup popisuje oficiální dokumentace. |
+
+</details>
 
 Dokumentace: [Install Docker Engine on Ubuntu](https://docs.docker.com/engine/install/ubuntu/)
 
@@ -376,7 +403,12 @@ Get:5 https://download.docker.com/linux/ubuntu noble InRelease [48.5 kB]
 Get:6 https://download.docker.com/linux/ubuntu noble/stable amd64 Packages [73.8 kB]
 ```
 
+<details>
+<summary>📘 Samostudium: proč <code>Signed-By</code></summary>
+
 > **Proč `Signed-By`:** Klíč Dockeru platí jen pro tento repozitář, ne pro všechny. Kdyby někdo podvrhl balíček v jiném repozitáři, klíč Dockeru ho „nepodepíše“.
+
+</details>
 
 ### 5.3 Instalace
 
@@ -385,6 +417,9 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get -y install \
   docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 ```
 
+<details>
+<summary>📘 Samostudium: co který balíček obsahuje</summary>
+
 | Balíček | Obsah |
 |---|---|
 | `docker-ce` | Docker Engine, démon `dockerd` |
@@ -392,6 +427,8 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get -y install \
 | `containerd.io` | container runtime, na kterém Docker staví |
 | `docker-buildx-plugin` | `docker buildx`, moderní sestavování image |
 | `docker-compose-plugin` | `docker compose` (Compose v2+, bez pomlčky) |
+
+</details>
 
 Služba `docker` se po instalaci sama spustí a je povolená po startu systému:
 
@@ -421,7 +458,8 @@ id -nG
 labadmin adm cdrom sudo dip plugdev lxd docker
 ```
 
-> ⚠️ **Bezpečnostní dopad: skupina `docker` = root.**
+> [!WARNING]
+> **Bezpečnostní dopad: skupina `docker` = root.**
 > Kdo smí mluvit s Docker démonem, může spustit kontejner s připojeným kořenovým souborovým systémem hosta a v něm dělat cokoli jako root:
 > ```bash
 > docker run --rm -it -v /:/host alpine chroot /host   # = root shell na hostu
@@ -454,6 +492,9 @@ This message shows that your installation appears to be working correctly.
 ...
 ```
 
+<details>
+<summary>📘 Samostudium: co ověřuje <code>hello-world</code>, storage driver a verze</summary>
+
 `hello-world` ověří celý řetězec najednou: klient → démon → stažení image z Docker Hubu → spuštění kontejneru → výstup zpět do terminálu.
 
 ```bash
@@ -465,7 +506,14 @@ Storage: overlayfs  Cgroup: systemd v2  Root: /var/lib/docker
 
 > Verze v ukázkách odpovídají referenčnímu labu (listopad 2026). U vás mohou být novější. Zde to nevadí, Docker Engine se aktualizuje přes `apt`. Pevné verze naopak budeme držet u **image** aplikací.
 
+</details>
+
 ### 5.6 Tahák: základní příkazy Dockeru
+
+Přehled příkazů, které budeme používat. Na školení ho jen zmíníme, slouží jako příručka.
+
+<details>
+<summary>📘 Tahák: image, kontejnery, volumes, Docker Compose</summary>
 
 **Image:**
 
@@ -509,7 +557,10 @@ Storage: overlayfs  Cgroup: systemd v2  Root: /var/lib/docker
 
 Dokumentace: [Docker CLI reference](https://docs.docker.com/reference/cli/docker/), [Docker Compose](https://docs.docker.com/compose/), [docker compose CLI](https://docs.docker.com/reference/cli/docker/compose/)
 
-### Troubleshooting
+</details>
+
+<details>
+<summary>🔧 Řešení problémů</summary>
 
 | Příznak | Příčina / řešení |
 |---|---|
@@ -519,6 +570,8 @@ Dokumentace: [Docker CLI reference](https://docs.docker.com/reference/cli/docker
 | `toomanyrequests: You have reached your pull rate limit` | Limit anonymních stahování z Docker Hubu (sdílená veřejná IP celé učebny). Přihlaste se `docker login` nebo použijte registry mirror. |
 | `docker: command not found` po instalaci přes snap | Odinstalujte snap (`sudo snap remove docker`) a postupujte podle 5.2–5.3. |
 
+</details>
+
 ---
 
 ## 6. Krok 3: LiteLLM Proxy a PostgreSQL
@@ -527,20 +580,66 @@ Dokumentace: [Docker CLI reference](https://docs.docker.com/reference/cli/docker
 
 Dokumentace: [Docker quick start](https://docs.litellm.ai/docs/proxy/docker_quick_start), [Config](https://docs.litellm.ai/docs/proxy/configs), [Production best practices](https://docs.litellm.ai/docs/proxy/prod), [OpenRouter provider](https://docs.litellm.ai/docs/providers/openrouter)
 
-### 6.1 Pracovní adresář a API klíč poskytovatele
+### 6.1 Repozitář, pracovní adresář a API klíč
 
-Adresář `/opt/ai-stack` bude patřit vašemu uživateli. `docker compose` čte `.env` pod právy uživatele, který ho spouští, takže by ho jinak nepřečetl. Ostatní uživatelé do adresáře nesmí (`750`).
+> [!IMPORTANT]
+> **VM připravená skriptem `prepare.sh`:** Repozitář, soubory v `/opt/ai-stack` i tajemství v `.env` už existují a image jsou stažené. V kap. 6.1 a 6.2 **nic nespouštějte kromě ověření** (označená *Ověření*). Pokud ověření ukáže prázdný klíč OpenRouteru (`len=0`), doplňte ho: `cd /opt/ai-stack && ./set-env.sh OPENROUTER_API_KEY`. Pak pokračujte kap. 6.3.
 
-API klíč z OpenRouteru (kap. 2.2) vložíme tak, aby se **neobjevil na obrazovce ani v historii shellu**. `read -s` nezobrazuje psané znaky a proměnná se po zápisu smaže:
+Konfigurační soubory jsou v repozitáři školení. Stáhneme ho do domovského adresáře a do `/opt/ai-stack` zkopírujeme konfiguraci **fáze 1** (`deploy/stages/1-base`) a dva pomocné skripty:
 
 ```bash
+git clone <URL_REPOZITÁŘE> ~/ai-gateway-training
 sudo install -d -o "$USER" -g "$USER" -m 750 /opt/ai-stack
 cd /opt/ai-stack
-umask 077
-read -rsp "OpenRouter API key: " K && echo
-printf "OPENROUTER_API_KEY=%s\n" "$K" >> .env
-unset K
-chmod 600 .env
+cp ~/ai-gateway-training/deploy/stages/1-base/{docker-compose.yml,config.yaml} .
+cp ~/ai-gateway-training/deploy/{set-env.sh,use-stage.sh,.env.example} .
+ls -la
+```
+```
+drwxr-x--- 2 labadmin labadmin 4096 Nov 16 13:20 .
+-rw-r--r-- 1 labadmin labadmin 1635 Nov 16 13:20 config.yaml
+-rw-r--r-- 1 labadmin labadmin 3914 Nov 16 13:20 docker-compose.yml
+-rw-r--r-- 1 labadmin labadmin 1774 Nov 16 13:20 .env.example
+-rwxr-xr-x 1 labadmin labadmin 2498 Nov 16 13:20 set-env.sh
+-rwxr-xr-x 1 labadmin labadmin 2479 Nov 16 13:20 use-stage.sh
+```
+
+| Soubor | K čemu |
+|---|---|
+| `config.yaml` | konfigurace LiteLLM: modely a nastavení (kap. 6.3) |
+| `docker-compose.yml` | definice služeb: PostgreSQL, LiteLLM, Open WebUI (kap. 6.4) |
+| `set-env.sh` | zapíše hodnotu do `.env`, aniž by se objevila na obrazovce nebo v historii shellu |
+| `use-stage.sh` | v části 2 přepíná konfiguraci na další fázi (ukáže rozdíl, zazálohuje, zkopíruje) |
+| `.env.example` | vzor souboru `.env` se všemi proměnnými |
+
+Adresář `/opt/ai-stack` patří vašemu uživateli, protože `docker compose` čte `.env` pod právy uživatele, který ho spouští. Ostatní uživatelé do adresáře nesmí (`750`).
+
+<details>
+<summary>📘 Samostudium: proč je konfigurace rozdělená do fází</summary>
+
+Ve firmě by na serveru byla rovnou konečná konfigurace z gitu. Na školení ale stack stavíme postupně a v každém kroku chceme vidět jen to, co právě probíráme. Repozitář proto obsahuje stejné dva soubory v pěti verzích ([`deploy/stages/`](../deploy/stages/)):
+
+| Fáze | Kde v návodu | Co přibude |
+|---|---|---|
+| `1-base` | část 1 | PostgreSQL, LiteLLM s free modelem z OpenRouteru, Open WebUI |
+| `2-models` | část 2, modul A | Claude modely (Anthropic), fallbacky |
+| `3-guardrails` | část 2, modul E | guardraily |
+| `4-https` | část 2, modul F0 | reverse proxy Caddy (HTTPS) |
+| `5-local-model` | část 2, modul G | lokální model (konečný stav) |
+
+Mezi fázemi přepíná skript `use-stage.sh`: nejdřív ukáže `diff`, co se změní, starou verzi zazálohuje a novou zkopíruje. Nasazení (`docker compose …`) je vždy samostatný, vědomý krok.
+
+</details>
+
+API klíč z OpenRouteru (kap. 2.2) uložíme skriptem `set-env.sh`. Ten se na klíč zeptá **skrytě** (nezobrazí se na obrazovce ani neuloží do historie shellu), odmítne klíč s neviditelnými řídicími znaky a zapíše ho do `.env` s právy `600`:
+
+```bash
+cd /opt/ai-stack
+./set-env.sh OPENROUTER_API_KEY
+```
+```
+OPENROUTER_API_KEY (input is hidden, Enter = done):
+[OK] OPENROUTER_API_KEY saved: length 73, starts with "sk-or-v…"
 ```
 
 **Ověření** (délka a začátek klíče, ne klíč samotný):
@@ -556,13 +655,33 @@ len=73 prefix=sk-or-v1-
 0
 ```
 
-> ⚠️ **Pozor při vkládání:** Klíč vložte a hned stiskněte Enter. Pokud mezitím zmáčknete šipku, Home apod., `read` uloží do proměnné i escape sekvenci terminálu (např. `ESC [ D`). Ta na obrazovce není vidět, ale LiteLLM pak hlásí *„Forbidden control character detected in headers“* (viz Troubleshooting). Kontrolní `grep` výše to odhalí. Klíč OpenRouteru má **73 znaků**.
+<details>
+<summary>📘 Samostudium: co dělá <code>set-env.sh</code> a proč neviditelné znaky</summary>
+
+Skript ([`deploy/set-env.sh`](../deploy/set-env.sh)) dělá totéž, co byste ručně udělali takto:
+
+```bash
+umask 077
+read -rsp "OpenRouter API key: " K && echo     # -s = nezobrazovat psané znaky
+printf "OPENROUTER_API_KEY=%s\n" "$K" >> .env  # printf je vestavěný příkaz, klíč není v seznamu procesů
+unset K
+chmod 600 .env
+```
+
+Navíc existující řádek se stejným názvem **nahradí** (ruční `>>` by vytvořil duplicitu) a odmítne hodnotu s řídicími znaky. Ty vzniknou, když při vkládání klíče stisknete šipku, Home apod.: `read` uloží do proměnné i escape sekvenci terminálu (např. `ESC [ D`). Na obrazovce není vidět, ale LiteLLM pak hlásí *„Forbidden control character detected in headers“*. Totéž způsobí `\r` ze schránky ve Windows. Klíč OpenRouteru má **73 znaků**.
+
+Hodnotu lze skriptu předat i rourou (`příkaz | ./set-env.sh NÁZEV`), to využijeme v kap. 7.1.
+
+</details>
 
 ### 6.2 Generování tajemství
+
+**VM připravená skriptem:** jen ověření (poslední příkaz bloku níže, `cut -d= …`).
 
 ```bash
 cd /opt/ai-stack
 umask 077
+IP=$(ip -4 route get 1.1.1.1 | awk '{for (i=1;i<NF;i++) if ($i=="src") print $(i+1)}')
 cat >> .env <<EOF
 
 # --- LiteLLM ---
@@ -573,6 +692,12 @@ UI_PASSWORD=$(openssl rand -base64 18 | tr -d "/+=")
 
 # --- PostgreSQL ---
 POSTGRES_PASSWORD=$(openssl rand -hex 24)
+
+# --- Open WebUI (kap. 7) ---
+WEBUI_SECRET_KEY=$(openssl rand -hex 32)
+WEBUI_URL=http://$IP:3000
+OPENWEBUI_LITELLM_KEY=
+SERVER_IP=$IP
 EOF
 chmod 600 .env
 cut -d= -f1 .env | grep -v '^#' | grep .      # jen názvy proměnných, ne hodnoty
@@ -584,7 +709,23 @@ LITELLM_SALT_KEY
 UI_USERNAME
 UI_PASSWORD
 POSTGRES_PASSWORD
+WEBUI_SECRET_KEY
+WEBUI_URL
+OPENWEBUI_LITELLM_KEY
+SERVER_IP
 ```
+Na VM připravené skriptem jsou v `.env` navíc prázdné řádky `ANTHROPIC_API_KEY` a `PROMPTGUARD_API_KEY` pro část 2 a pořadí se může lišit.
+
+| Proměnná | K čemu |
+|---|---|
+| `LITELLM_MASTER_KEY` | administrátorský klíč LiteLLM (viz tabulka níže) |
+| `LITELLM_SALT_KEY` | šifrování citlivých hodnot v databázi LiteLLM, **po prvním startu neměnit** |
+| `UI_USERNAME`, `UI_PASSWORD` | přihlášení do Admin UI LiteLLM (kap. 6.7) |
+| `POSTGRES_PASSWORD` | heslo databáze |
+| `WEBUI_SECRET_KEY` | podepisuje přihlašovací tokeny Open WebUI. Když ho změníte, odhlásí se všichni uživatelé |
+| `WEBUI_URL` | adresa, na které uživatelé Open WebUI otevírají |
+| `OPENWEBUI_LITELLM_KEY` | zatím **prázdný**: virtual key pro Open WebUI vytvoří LiteLLM, až poběží (kap. 7.1) |
+| `SERVER_IP` | IP adresa serveru, v části 2 půjde do certifikátu HTTPS |
 
 `openssl rand -hex 32` vrátí 32 náhodných bajtů jako 64 hex znaků (256 bitů entropie). Vzor souboru je v repu jako [`deploy/.env.example`](../deploy/.env.example).
 
@@ -601,7 +742,9 @@ POSTGRES_PASSWORD
 
 **Pravidlo:** Master key se používá jen pro administraci. Každý klient dostane vlastní virtual key (kap. 7). Když jeden klíč unikne, zneplatníte jen ten jeden.
 
-#### Proč se salt key nesmí měnit
+<details>
+<summary>📘 Samostudium: proč se salt key nesmí měnit</summary>
+
 
 `LITELLM_SALT_KEY` je klíč, kterým LiteLLM **šifruje citlivé hodnoty uložené v databázi**, např. API klíče poskytovatelů přidané přes Admin UI. Kdybyste ho po prvním startu změnili, LiteLLM by uložené hodnoty už nedokázal dešifrovat a modely přidané přes UI by přestaly fungovat. Neexistuje rotace „na místě“. Proto:
 - vygenerujte ho **před prvním startem** a pak už na něj nesahejte;
@@ -609,9 +752,11 @@ POSTGRES_PASSWORD
 
 Master key naopak rotovat lze ([Rotating master key](https://docs.litellm.ai/docs/proxy/master_key_rotations)).
 
+</details>
+
 ### 6.3 Konfigurace LiteLLM: `config.yaml`
 
-Soubor [`deploy/config.yaml`](../deploy/config.yaml) zkopírujte do `/opt/ai-stack/config.yaml`:
+Soubor `config.yaml` fáze 1 ([`deploy/stages/1-base/config.yaml`](../deploy/stages/1-base/config.yaml)) už je v `/opt/ai-stack`. Bez komentářů vypadá takto:
 
 ```yaml
 model_list:
@@ -638,7 +783,17 @@ Klíčové body:
 
 ### 6.4 `docker-compose.yml`
 
-Soubor [`deploy/docker-compose.yml`](../deploy/docker-compose.yml) zkopírujte do `/opt/ai-stack/docker-compose.yml`. Ve stavu po tomto kroku obsahuje služby `postgres` a `litellm`. Finální verze v repu má navíc `open-webui` z kroku 4. Hlavní části:
+Soubor [`docker-compose.yml`](../deploy/stages/1-base/docker-compose.yml) fáze 1 popisuje tři služby: `postgres`, `litellm` a `open-webui`. Open WebUI spustíme až v kroku 4, protože potřebuje virtual key, který vytvoří běžící LiteLLM.
+
+Na co se v souboru podívat:
+- **Pinované verze image** (`ghcr.io/berriai/litellm:v1.106.6`, nikdy `latest`): víte, co běží, a update je vědomý krok (kap. 8.3).
+- **PostgreSQL nemá `ports:`**, takže je dostupný jen uvnitř Docker sítě `ai-net`, ne zvenku.
+- **`${PROMĚNNÁ:?missing in .env}`**: když proměnná v `.env` chybí, compose odmítne start s jasnou chybou.
+- **Každá služba dostane jen své proměnné** (`environment:`), ne celý `.env`. Open WebUI nevidí klíč OpenRouteru.
+- **`healthcheck` a `depends_on`**: LiteLLM startuje, až když databáze přijímá spojení.
+
+<details>
+<summary>📘 Samostudium: <code>docker-compose.yml</code> řádek po řádku</summary>
 
 ```yaml
 name: ai-stack
@@ -700,14 +855,18 @@ services:
 | **Rotace logů** | Výchozí `json-file` log driver logy neomezuje, na 40GB disku by je časem zaplnil. |
 | **`LITELLM_MODE: PRODUCTION`** | LiteLLM nebude uvnitř kontejneru hledat a načítat vlastní `.env`. Proměnné dodává výhradně compose. |
 
+</details>
+
 ### 6.5 Spuštění
 
 ```bash
 cd /opt/ai-stack
-docker compose config --quiet && echo CONFIG_OK     # syntaktická kontrola + dosazení .env
-docker compose pull                                 # stáhne image (~2,5 GB, pár minut)
-docker compose up -d
+OPENWEBUI_LITELLM_KEY=pending docker compose config --quiet && echo CONFIG_OK   # kontrola + dosazení .env
+OPENWEBUI_LITELLM_KEY=pending docker compose pull postgres litellm             # ~2,5 GB (připravená VM: hned hotovo)
+OPENWEBUI_LITELLM_KEY=pending docker compose up -d postgres litellm
 ```
+
+Spouštíme jen `postgres` a `litellm`. Proč `OPENWEBUI_LITELLM_KEY=pending`: compose při každém příkazu kontroluje **celý** soubor a odmítl by ho kvůli prázdnému klíči služby `open-webui` (`:?missing in .env`). Proměnná zapsaná před příkazem platí jen pro tento jeden příkaz a má přednost před `.env`. Open WebUI se nespustí, takže se dočasná hodnota nikam nepoužije.
 
 **Očekávaný výstup:**
 ```
@@ -817,7 +976,11 @@ Po přihlášení si projděte:
 - **Logs**: požadavky z testů výše, včetně neúspěšných [SCREENSHOT: Logs s testovacím requestem]
 - **Usage**: útrata (u free modelu 0 USD) a počty tokenů
 
-> 🔐 Podle [dokumentace](https://docs.litellm.ai/docs/proxy/ui) jsou `UI_USERNAME`/`UI_PASSWORD` určené jen pro první přihlášení. V produkci vytvořte v Admin UI osobní účty adminů (*Internal Users*) a přihlášení přes proměnné prostředí vypněte (`general_settings.disable_env_credential_login: true`). Pokud `UI_PASSWORD` nenastavíte, do UI se lze přihlásit **master key**.
+<details>
+<summary>📘 Samostudium: přihlášení do Admin UI v produkci a ověření z příkazové řádky</summary>
+
+> [!IMPORTANT]
+> Podle [dokumentace](https://docs.litellm.ai/docs/proxy/ui) jsou `UI_USERNAME`/`UI_PASSWORD` určené jen pro první přihlášení. V produkci vytvořte v Admin UI osobní účty adminů (*Internal Users*) a přihlášení přes proměnné prostředí vypněte (`general_settings.disable_env_credential_login: true`). Pokud `UI_PASSWORD` nenastavíte, do UI se lze přihlásit **master key**.
 
 **Ověření z příkazové řádky** (když nemáte po ruce prohlížeč):
 ```bash
@@ -828,7 +991,10 @@ curl -s -o /dev/null -w "%{http_code} -> %{redirect_url}\n" -X POST http://local
 303 -> http://localhost:4000/ui?login=success
 ```
 
-### Troubleshooting
+</details>
+
+<details>
+<summary>🔧 Řešení problémů</summary>
 
 | Příznak | Příčina / řešení |
 |---|---|
@@ -843,6 +1009,8 @@ curl -s -o /dev/null -w "%{http_code} -> %{redirect_url}\n" -X POST http://local
 | `Invalid model name passed in model=…` | Klient volá jiné jméno než `model_name` v `config.yaml` (např. ID z OpenRouteru místo `nemotron-3-ultra`). |
 | Admin UI se nenačte zvenku, lokálně `curl` funguje | Síťový firewall mezi vámi a VM blokuje port 4000, nebo voláte špatnou IP. |
 | Změna v `config.yaml` se neprojevila | Config se čte při startu: `docker compose restart litellm`. |
+
+</details>
 
 ---
 
@@ -859,12 +1027,11 @@ Proč ne master key:
 - **Spend tracking.** Útrata a logy se v LiteLLM přiřadí ke klíči `open-webui`. Uvidíte, kolik stojí webové UI v porovnání s ostatními aplikacemi.
 - **Bezpečné odvolání.** Pokud klíč unikne (např. ze zálohy volume Open WebUI), zneplatníte jen jeho. Ostatní klienti ani admin přístup se změny nedotknou.
 
-Klíč vytvoříme API voláním s master key a jeho hodnotu rovnou zapíšeme do `.env`, bez vypsání na obrazovku:
+Klíč vytvoříme API voláním s master key a jeho hodnotu rourou předáme skriptu `set-env.sh`, který ji zapíše do připraveného řádku `OPENWEBUI_LITELLM_KEY=` v `.env`. Na obrazovce se klíč neobjeví:
 
 ```bash
 cd /opt/ai-stack
 set -a; . ./.env; set +a
-umask 077
 
 resp=$(curl -s http://localhost:4000/key/generate \
   -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
@@ -872,24 +1039,25 @@ resp=$(curl -s http://localhost:4000/key/generate \
   -d '{"key_alias":"open-webui","models":["nemotron-3-ultra"],"metadata":{"service":"open-webui"}}')
 
 echo "$resp" | jq -c '{key_alias, models, key_prefix: .key[0:5]}'
-
-printf "\n# --- Open WebUI ---\nOPENWEBUI_LITELLM_KEY=%s\nWEBUI_SECRET_KEY=%s\nWEBUI_URL=http://<IP_SERVERU>:3000\n" \
-  "$(echo "$resp" | jq -r .key)" "$(openssl rand -hex 32)" >> .env
-chmod 600 .env
+echo "$resp" | jq -r .key | ./set-env.sh OPENWEBUI_LITELLM_KEY
 unset resp
 ```
 ```
 {"key_alias":"open-webui","models":["nemotron-3-ultra"],"key_prefix":"sk-Ab"}
+[OK] OPENWEBUI_LITELLM_KEY saved: length 25, starts with "sk-Ab…"
 ```
 
 - `"models": ["nemotron-3-ultra"]` omezí klíč jen na tento model. Model přidaný později do `config.yaml` tento klíč automaticky neuvidí.
 - Stejně lze nastavit i `max_budget`, `rpm_limit`, `tpm_limit` nebo `duration` (expirace). Viz [Virtual keys](https://docs.litellm.ai/docs/proxy/virtual_keys).
 - Klíč můžete vytvořit i v Admin UI: **Virtual Keys → + Create New Key** [SCREENSHOT: vytvoření virtual key v Admin UI]. Hodnota klíče se zobrazí **jen jednou**.
-- `WEBUI_SECRET_KEY` podepisuje přihlašovací tokeny (JWT) Open WebUI. Když ho změníte, odhlásí se všichni uživatelé.
 
 ### 7.2 Služba `open-webui` v compose
 
-Do `docker-compose.yml` přibude služba a volume. Finální soubor je [`deploy/docker-compose.yml`](../deploy/docker-compose.yml):
+Služba `open-webui` je v `docker-compose.yml` od začátku (kap. 6.4), teď ji poprvé spustíme. Připojuje se k LiteLLM po **interní Docker síti** na adrese `http://litellm:4000/v1` (jméno služby funguje jako DNS jméno) a autentizuje se virtual key z `.env`. Na hostu je vystavená na portu **3000**.
+
+<details>
+<summary>📘 Samostudium: služba <code>open-webui</code> řádek po řádku</summary>
+
 
 ```yaml
   open-webui:
@@ -929,7 +1097,10 @@ volumes:
 | volume `open-webui-data` | uživatelé, chaty, nastavení (SQLite DB), nahrané soubory, cache embedding modelu |
 | `depends_on … service_healthy` | Open WebUI startuje, až když LiteLLM odpovídá, takže při startu načte seznam modelů. |
 
-> ⚠️ **Past: „ConfigVar“ proměnné se čtou jen při prvním startu.**
+</details>
+
+> [!WARNING]
+> **Past: „ConfigVar“ proměnné se čtou jen při prvním startu.**
 > `OPENAI_API_BASE_URL`, `OPENAI_API_KEY`, `ENABLE_OLLAMA_API`, `DEFAULT_USER_ROLE`, `ENABLE_SIGNUP` a další si Open WebUI při **prvním** startu uloží do své databáze. Od té chvíle platí hodnota z databáze a změna v `.env` se **ignoruje**. Proto:
 > - virtual key musí být v `.env` **dřív**, než Open WebUI poprvé spustíte;
 > - pozdější změnu (např. nový klíč) proveďte v **Admin Panel → Settings → Connections**;
@@ -951,7 +1122,8 @@ ai-stack-open-webui-1   ...   Up 55 seconds (healthy)   0.0.0.0:3000->8080/tcp, 
 ai-stack-postgres-1     ...   Up 37 minutes (healthy)   5432/tcp
 ```
 
-Při prvním startu Open WebUI stahuje z Hugging Face embedding model `sentence-transformers/all-MiniLM-L6-v2` (pro práci s dokumenty, RAG). V logu uvidíte `Fetching 30 files…` a varování `You are sending unauthenticated requests to the HF Hub`, které můžete ignorovat. Model se uloží do volume, další starty už ho nestahují.
+> [!NOTE]
+> Při prvním startu Open WebUI stahuje z Hugging Face embedding model `sentence-transformers/all-MiniLM-L6-v2` (pro práci s dokumenty, RAG). V logu uvidíte `Fetching 30 files…` a varování `You are sending unauthenticated requests to the HF Hub`, které můžete ignorovat. Model se uloží do volume, další starty už ho nestahují.
 
 ```bash
 docker compose logs -f open-webui
@@ -982,7 +1154,8 @@ none
 
 ### 7.5 První přihlášení: admin účet
 
-> ⚠️ **První zaregistrovaný účet se automaticky stane administrátorem.**
+> [!WARNING]
+> **První zaregistrovaný účet se automaticky stane administrátorem.**
 > Dokud se nikdo nezaregistruje, může admin účet „obsadit“ **kdokoli**, kdo se k portu 3000 dostane jako první. Proto:
 > - zaregistrujte se **hned po prvním startu**, ještě než adresu komukoli pošlete;
 > - stav ověříte příkazem `curl -s http://localhost:3000/api/config | jq .onboarding`. Hodnota `true` znamená, že admin ještě neexistuje.
@@ -1038,9 +1211,11 @@ litellm-1  | INFO:     172.18.0.4:53808 - "POST /v1/chat/completions HTTP/1.1" 2
 
 V Admin UI LiteLLM (`http://<IP_SERVERU>:4000/ui` → **Logs**) je request vidět s klíčem `open-webui`. [SCREENSHOT: LiteLLM Logs s requestem od klíče open-webui]
 
-> 💡 **Proč dva požadavky na jeden dotaz?** Open WebUI kromě vlastní odpovědi posílá na pozadí další požadavky na stejný model, např. **vygenerování názvu chatu**, tagů nebo návrhů dalších otázek. Tyto *tasks* se taky počítají do limitů a útraty. U free modelu s limitem 50 požadavků denně je to znát. Lze je vypnout nebo přesměrovat na jiný model v **Admin Panel → Settings → Interface**.
+> [!TIP]
+> **Proč dva požadavky na jeden dotaz?** Open WebUI kromě vlastní odpovědi posílá na pozadí další požadavky na stejný model, např. **vygenerování názvu chatu**, tagů nebo návrhů dalších otázek. Tyto *tasks* se taky počítají do limitů a útraty. U free modelu s limitem 50 požadavků denně je to znát. Lze je vypnout nebo přesměrovat na jiný model v **Admin Panel → Settings → Interface**.
 
-### Troubleshooting
+<details>
+<summary>🔧 Řešení problémů</summary>
 
 | Příznak | Příčina / řešení |
 |---|---|
@@ -1051,6 +1226,8 @@ V Admin UI LiteLLM (`http://<IP_SERVERU>:4000/ui` → **Logs**) je request vidě
 | Někdo jiný se stal adminem | V labu: `docker compose down`, `docker volume rm ai-stack_open-webui-data` (**smaže všechny chaty a uživatele**), `docker compose up -d` a ihned se zaregistrujte. |
 | `429` v chatu | Limit free modelu na OpenRouteru (20/min, 50/den), viz kap. 2.2. Zvýší ho i tasks Open WebUI (název chatu atd.). |
 | Port 3000 nedostupný z prohlížeče | Ověřte `curl -I http://localhost:3000` na serveru. Pokud lokálně funguje, blokuje to síťový firewall mezi vámi a VM. |
+
+</details>
 
 ---
 
@@ -1123,12 +1300,20 @@ curl -s http://localhost:4000/health/readiness | jq '{status, db}'
  Container ai-stack-litellm-1 Started
 ```
 
+<details>
+<summary>📘 Samostudium: na co si dát pozor u jednotlivých komponent</summary>
+
 | Komponenta | Na co si dát pozor |
 |---|---|
 | **LiteLLM** | Při startu automaticky migruje schéma DB. **Návrat na starší verzi po migraci nemusí fungovat.** Proto vždy nejdřív záloha DB. Volte release starý aspoň 1–2 týdny. |
 | **Open WebUI** | Také migruje svou DB (`webui.db`). Downgrade oficiálně podporovaný není, tedy záloha volume. Viz [Updating Open WebUI](https://docs.openwebui.com/getting-started/updating). |
 | **PostgreSQL** | **Minor** verze (`16.15` → `16.16`) stačí změnit tag a `up -d`, formát dat je kompatibilní. **Major** verze (`16` → `17`) **nelze** jen přepnout. Je potřeba `pg_dump` → nový prázdný volume → `pg_restore`, případně `pg_upgrade`. |
 | **Docker Engine** | Aktualizuje se přes `apt` spolu se systémem (`sudo apt-get upgrade`). Při upgradu se restartuje démon a s ním i kontejnery. |
+
+</details>
+
+> [!NOTE]
+> Verze image jsou zapsané i v konfiguračních fázích v repozitáři. Pokud verzi změníte jen na serveru, další `./use-stage.sh` v části 2 ji vrátí zpět (a ukáže to v `diff`). Ve firmě proto verzi měňte v gitu a na server ji nasazujte odtud.
 
 Úklid starých image po úspěšném updatu (smaže jen image nepoužívané žádným kontejnerem):
 ```bash
@@ -1180,17 +1365,24 @@ drwx------ 2 labadmin labadmin   4096 Nov 16 14:18 .
 -rw------- 1 labadmin labadmin  40503 Nov 16 14:18 open-webui-data.tar.gz
 ```
 
-Vysvětlení:
+<details>
+<summary>📘 Samostudium: proč záloha vypadá takhle</summary>
+
 - **`docker run … alpine tar`**: k obsahu volume se nejbezpečněji dostanete dočasným kontejnerem, který volume připojí (`:ro` = jen pro čtení). Nespoléhejte na interní cestu `/var/lib/docker/volumes/…`.
 - **`--exclude=./cache`**: cache obsahuje stažené embedding modely (~1 GB), které si Open WebUI při startu stáhne znovu. Bez ní má záloha řádově desítky kB místo 1 GB.
 - **`chown` a `umask 077`**: kontejner běží jako root, takže bez toho by archiv patřil rootovi a byl čitelný pro všechny. Záloha přitom obsahuje hashe hesel uživatelů a uložený virtual key.
 - **Výpadek** Open WebUI trvá jen pár sekund (zastavení → tar → start, healthy zhruba za 30 s). LiteLLM API běží celou dobu.
+
+</details>
 
 **Ověření zálohy:**
 ```bash
 docker compose exec -T postgres pg_restore --list < "$B/litellm-db.dump" | grep -c "TABLE DATA"   # počet tabulek s daty, např. 98
 tar tzf "$B/open-webui-data.tar.gz" | head      # ./webui.db, ./vector_db/..., ./uploads/
 ```
+
+<details>
+<summary>📘 Samostudium: zkušební obnova DB do dočasného kontejneru</summary>
 
 **Zkušební obnova DB** do dočasného kontejneru, bez dopadu na produkci:
 ```bash
@@ -1205,11 +1397,26 @@ RESTORE_OK
 open-webui
 ```
 
-> 🔐 Záloha obsahuje **všechna tajemství** (`.env`). Ukládejte ji mimo server (jinak při ztrátě VM přijdete o data i zálohu), šifrovaně (např. `age`, `gpg`, šifrovaný backup repozitář `restic`/`borg`) a s omezeným přístupem. Pravidelné spouštění (cron/systemd timer) a retence jsou námět na pokračování.
+</details>
+
+> [!IMPORTANT]
+> Záloha obsahuje **všechna tajemství** (`.env`). Ukládejte ji mimo server (jinak při ztrátě VM přijdete o data i zálohu), šifrovaně (např. `age`, `gpg`, šifrovaný backup repozitář `restic`/`borg`) a s omezeným přístupem. Pravidelné spouštění (cron/systemd timer) a retence jsou námět na pokračování.
+
+> [!NOTE]
+> **Po modulu F0 části 2** přibude volume `caddy-data` s interní certifikační autoritou (včetně jejího privátního klíče). Zálohujte ho stejně jako data Open WebUI, jinak po ztrátě serveru musí všichni klienti importovat nový root certifikát:
+> ```bash
+> docker run --rm -v ai-stack_caddy-data:/data:ro -v "$B":/backup alpine:3.24.3 \
+>   sh -c "umask 077; tar czf /backup/caddy-data.tar.gz -C /data . && chown $(id -u):$(id -g) /backup/caddy-data.tar.gz"
+> ```
 
 Dokumentace: [Open WebUI – Backups](https://docs.openwebui.com/tutorials/maintenance/backups)
 
 ### 8.5 Obnova (osnova)
+
+Obnovu na školení neprovádíme, postup je pro samostudium a pro skutečný provoz.
+
+<details>
+<summary>📘 Samostudium: postup obnovy na stejném nebo novém serveru</summary>
 
 Na stejném nebo novém serveru s nainstalovaným Dockerem (kap. 4–5):
 
@@ -1217,6 +1424,7 @@ Na stejném nebo novém serveru s nainstalovaným Dockerem (kap. 4–5):
 B=/opt/ai-stack-backups/<TIMESTAMP>
 sudo install -d -o "$USER" -g "$USER" -m 750 /opt/ai-stack && cd /opt/ai-stack
 cp -p "$B"/.env "$B"/docker-compose.yml "$B"/config.yaml .
+cp ~/ai-gateway-training/deploy/{set-env.sh,use-stage.sh} .
 
 # 1) Postgres: spustit jen DB (prázdný volume), obnovit dump
 docker compose up -d postgres
@@ -1236,7 +1444,10 @@ docker compose ps
 >
 > Obnovu na **běžící** produkční instanci (přepsání existujících dat) dělejte jen se zálohou aktuálního stavu. `--clean` maže objekty v DB před obnovením.
 
-### Troubleshooting
+</details>
+
+<details>
+<summary>🔧 Řešení problémů</summary>
 
 | Příznak | Příčina / řešení |
 |---|---|
@@ -1245,6 +1456,8 @@ docker compose ps
 | `pg_dump: error: connection … failed` | Postgres neběží nebo voláte špatného uživatele. Spusťte `docker compose ps postgres`. |
 | Záloha je obrovská | Nepoužili jste `--exclude=./cache`. |
 | `no space left on device` | Spusťte `docker system df`, ukliďte staré image (`docker image prune`) a staré zálohy. Logy hlídá rotace. |
+
+</details>
 
 ---
 
@@ -1278,17 +1491,18 @@ Připomenutí: porty publikované Dockerem **obcházejí ufw** (kap. 4.4). Omeze
 
 **Současný stav:** Prohlížeč komunikuje s Open WebUI a klienti s LiteLLM přes **nešifrované HTTP**. Hesla, session tokeny, virtual keys i obsah konverzací jdou po síti v čitelné podobě a kdokoli ve stejné síti je může odposlechnout.
 
-**Proč to v labu zatím neřešíme:**
-- lab je izolovaná síť bez skutečných uživatelů a citlivých dat;
-- TLS vyžaduje DNS jméno a certifikát (interní CA nebo Let's Encrypt), což je samostatné téma;
-- cílem tohoto kroku je pochopit samotný AI stack a nekomplikovat ho další vrstvou.
+**Řešení:** HTTPS doplníme v části 2, [modul F0](navod-cast2.md#7-modul-f0-https-pro-gateway-caddy): reverse proxy Caddy s interní certifikační autoritou, porty 443 a 8443 a na konci školení uzavření přímých portů 3000 a 4000. V části 1 ho vynecháváme, abychom nejdřív pochopili samotný AI stack bez další vrstvy.
 
-**Co s tím v produkci:**
-1. Přidat **reverse proxy** (Caddy, Traefik nebo nginx) jako další službu v compose. Bude jediná vystavená na portu 443.
-2. Certifikát z **interní CA** (např. AD CS v doméně `lab.example.com`) nebo z Let's Encrypt (pro veřejné domény, Caddy to umí automaticky).
+<details>
+<summary>📘 Samostudium: HTTPS v produkci</summary>
+
+1. **Reverse proxy** (Caddy, Traefik nebo nginx) jako další služba v compose, jediná vystavená ven.
+2. Certifikát z **interní CA** (např. AD CS v doméně `lab.example.com`) nebo z Let's Encrypt (pro veřejné domény, Caddy to umí automaticky) na **DNS jméno**, ne na IP.
 3. Porty 3000 a 4000 publikovat jen na `127.0.0.1` nebo vůbec, protože proxy je ve stejné Docker síti.
-4. Nastavit `WEBUI_URL=https://…` a v LiteLLM `trusted_proxy_ranges` na síť proxy, aby fungovaly IP adresy klientů a limity přihlášení.
-5. Přesměrovat HTTP → HTTPS a zapnout HSTS.
+4. `WEBUI_URL=https://…` a v LiteLLM `use_x_forwarded_for`, aby fungovaly IP adresy klientů a limity přihlášení.
+5. Přesměrování HTTP → HTTPS a HSTS.
+
+</details>
 
 Do zavedení HTTPS: **nepoužívat skutečná hesla z jiných systémů** a nevkládat do chatu citlivá data. Free modely na OpenRouteru navíc mohou prompty logovat (kap. 2.2).
 
@@ -1303,32 +1517,19 @@ Do zavedení HTTPS: **nepoužívat skutečná hesla z jiných systémů** a nevk
 
 ## 10. Další kroky
 
-Osnova pro navazující části školení:
+Na tuto část navazuje [**část 2: Používání a správa**](navod-cast2.md): další modely a fallbacky, Open WebUI pro uživatele, skupiny a přístup k modelům, týmy, budgety a rate limity, guardraily, HTTPS, připojení klientů (API, Claude Code, Codex CLI, Claude Desktop) a lokální model.
 
-1. **Uživatelé a role v Open WebUI**
-   - role `admin`, `user`, `pending`; schvalování registrací; ruční zakládání účtů
-   - skupiny a oprávnění (přístup k modelům, funkcím, znalostním bázím)
-   - [Roles](https://docs.openwebui.com/features/authentication-access/rbac/roles)
-2. **Další modely v LiteLLM**
-   - přidání dalších free i placených modelů (OpenRouter, Anthropic, OpenAI, Azure OpenAI, lokální Ollama/vLLM)
-   - `model_name` jako alias: výměna poskytovatele bez zásahu do klientů
-   - fallbacks a load balancing mezi poskytovateli; `store_model_in_db` a správa modelů z Admin UI
-3. **Budgety a rate limity v LiteLLM**
-   - `max_budget`, `budget_duration`, `rpm_limit`, `tpm_limit` na virtual key, uživatele a tým
-   - týmy a interní uživatelé, reporting útraty
-   - [Virtual keys](https://docs.litellm.ai/docs/proxy/virtual_keys), [Cost tracking](https://docs.litellm.ai/docs/proxy/cost_tracking)
-4. **SSO**
+Mimo rozsah školení zůstávají tato témata:
+
+1. **SSO**
    - Open WebUI: OIDC (Entra ID, Keycloak) nebo LDAP proti AD `lab.example.com`, mapování skupin na role
    - LiteLLM Admin UI: SSO pro administrátory
    - per-user identita až do LiteLLM (`ENABLE_FORWARD_USER_INFO_HEADERS`) a útrata po uživatelích
-5. **Reverse proxy s TLS**
-   - Caddy, Traefik nebo nginx v compose, certifikát z interní CA (AD CS), DNS záznamy
-   - uzavření portů 3000 a 4000, HSTS, `trusted_proxy_ranges`
-6. **Logování do SIEM**
+2. **Logování do SIEM**
    - LiteLLM callbacks (OpenTelemetry, Datadog, Langfuse, S3…) a JSON logy (`json_logs: true`)
    - logy kontejnerů přes Docker log driver (syslog/gelf/fluentd) nebo agenta (Fluent Bit, Elastic Agent, Wazuh)
    - auditní události: přihlášení, vytváření klíčů, změny rolí; GDPR a retence promptů
-7. **Provozní automatizace**
+3. **Provozní automatizace**
    - plánované šifrované zálohy mimo server (systemd timer + restic/borg)
    - monitoring (`/health/readiness`, Prometheus metriky), alerting
    - nasazení přes Ansible a infrastrukturu jako kód
@@ -1364,145 +1565,10 @@ Osnova pro navazující části školení:
 | Komponenta | Verze |
 |---|---|
 | Ubuntu Server | 24.04 LTS, jádro 6.8.0-149 |
-| Docker Engine / Compose | 29.9.3 / v5.7.1 (od 16. 11. večer 29.10.0) |
+| Docker Engine / Compose | 29.10.0 / v5.7.1 (ukázky výstupů v kap. 5 jsou z 29.9.3) |
 | LiteLLM | `ghcr.io/berriai/litellm:v1.106.6` |
 | PostgreSQL | `postgres:16.15` |
 | Open WebUI | `ghcr.io/open-webui/open-webui:v0.12.5` |
 | Alpine (zálohy) | `alpine:3.24.3` |
 | Model | `openrouter/nvidia/nemotron-3-ultra-550b-a55b:free` |
-
----
-
-## 12. Příloha A: Automatická příprava serveru (`prepare.sh`)
-
-**Účel:** Na školení se nechceme dívat, jak se ~9 GB image stahuje přes sdílenou linku. Skript [`deploy/prepare.sh`](../deploy/prepare.sh) proto **předem** provede všechny přípravy z kapitol 4–6 a stáhne image. Připraví i serverovou část 2. části školení ([`navod-cast2.md`](navod-cast2.md)): reverse proxy Caddy pro HTTPS (modul F0) a místo v `.env` pro klíče Anthropic a PromptGuard. Samotný stack **nespouští**. To zůstává na účastnících (kap. 6.5 a dál).
-
-Skript počítá i s **minimalizovanou instalací** Ubuntu Serveru (*Ubuntu Server (minimized)*), kde chybí `curl`, `jq`, `ping`, editor a další běžné nástroje. Všechno, co potřebuje on sám nebo návod, nejdřív doinstaluje:
-
-| Skupina | Balíčky | K čemu |
-|---|---|---|
-| základní (vždy) | `ca-certificates`, `curl`, `gnupg`, `jq`, `openssl`, `iproute2`, `tzdata` | GPG klíč Dockeru a jeho ověření, testy API, JSON, generování tajemství, `ss`/`ip`, časová pásma |
-| nástroje pro řešení problémů (vynechá `--no-extras`) | `iputils-ping`, `bind9-dnsutils`, `less`, `nano`, `git` | `ping`, `dig`/`nslookup`, prohlížení logů, úprava souborů, `git clone` repozitáře |
-| Docker | `docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-buildx-plugin`, `docker-compose-plugin` | závislosti (`iptables`, …) doplní `apt` sám |
-
-`ifconfig` ani `netstat` (balíček `net-tools`) neinstalujeme. Jsou zastaralé a návod používá jejich náhrady `ip a` a `ss` z `iproute2`. Ostatní nástroje použité v návodu (`psql`, Python) běží uvnitř kontejnerů, na hostu je není potřeba instalovat.
-
-| Krok skriptu | Odpovídá kapitole | Poznámka |
-|---|---|---|
-| 0/7 kontrola OS, místa na `/var` (min. 17 GB), RAM | 3 | malé místo = konec s chybou |
-| 1/7 `apt upgrade`, balíčky (viz tabulka výše), časové pásmo, porty 3000/4000/443/8443 | 3.3, 4.1–4.3 | upgrade lze vynechat přes `--skip-upgrade`; obsazený port = varování |
-| 2/7 Docker Engine + Compose z `download.docker.com` | 5.1–5.3 | instaluje jen při shodě **fingerprintu GPG klíče** |
-| 3/7 uživatel do skupiny `docker` | 5.4 | projeví se po novém přihlášení |
-| 4/7 `/opt/ai-stack` + `docker-compose.yml`, `config.yaml`, `Caddyfile`, `.env.example` | 6.1, 6.3, 6.4; část 2: 4.3, 7.2 | odlišný existující soubor nejdřív zazálohuje (`*.bak-<datum>`) |
-| 5/7 `.env`: tajemství, `SERVER_IP`, `WEBUI_URL`, API klíče | 6.1, 6.2, 7.1; část 2: 1, 7.3 | existující hodnoty **nikdy nepřepisuje**; `SERVER_IP` zjistí sám; na klíče se zeptá skrytě |
-| 6/7 `docker compose config`, `docker compose pull` (postgres, litellm, open-webui, caddy) + `alpine:3.24.3`, `caddy validate` | 6.5, 7.3, 8.4; část 2: 7.4 | 3 pokusy při výpadku sítě |
-| 7/7 testovací `docker run`, `docker info` | 5.5 | |
-
-**Co skript záměrně nedělá:**
-- nespouští stack (`docker compose up`);
-- nevytváří virtual key pro Open WebUI, protože k tomu musí běžet LiteLLM (kap. 7.1); v `.env` nechá prázdný řádek `OPENWEBUI_LITELLM_KEY=`;
-- nevytváří interní CA Caddy. Ta vznikne při prvním startu kontejneru `caddy` a root certifikát se exportuje až potom (část 2, kap. 7.5);
-- nepovyšuje už nainstalovaný Docker (viz níže);
-- nerestartuje server, jen upozorní, pokud je restart potřeba.
-
-### Spuštění
-
-Na server zkopírujte obsah adresáře `deploy/` (např. `git clone` repozitáře nebo `scp`) a jako běžný uživatel se sudo spusťte:
-
-```bash
-cd ~/ai-stack-deploy          # adresář se soubory z deploy/
-chmod +x prepare.sh
-sudo ./prepare.sh             # nebo: sudo ./prepare.sh --skip-upgrade
-```
-
-| Parametr | Význam |
-|---|---|
-| `--skip-upgrade` | bez `apt upgrade` (rychlejší, méně dat) |
-| `--no-extras` | bez nástrojů pro řešení problémů (`ping`, `dig`, `less`, `nano`, `git`) |
-| `--user JMÉNO` | vlastník `/opt/ai-stack`, pokud ho nejde zjistit ze `sudo` |
-| `STACK_DIR=/cesta` (proměnná) | jiný cílový adresář, jen pro testování skriptu: `sudo STACK_DIR=/tmp/test ./prepare.sh` |
-
-Pokud skript běží v terminálu, zeptá se postupně na tři klíče:
-```
-  OpenRouter API key (sk-or-v1-…), then press Enter.
-  The key is not displayed. Empty Enter = fill it in later.
-  OpenRouter API key:
-  ...
-  Anthropic API key (sk-ant-…), then press Enter.
-  ...
-  PromptGuard API key (pg_…), then press Enter.
-```
-- **OpenRouter** je potřeba pro část 1. Klíč se kontroluje stejně jako v kap. 6.1: řídicí znaky (např. ze šipek) znamenají, že se klíč neuloží. Neočekávaný tvar (jiný prefix než `sk-or-v1-` nebo jiná délka než 73 znaků) jen vyvolá varování.
-- **Anthropic** a **PromptGuard** jsou volitelné, potřebuje je až část 2. Prázdný Enter je přeskočí. Compose je má jako nepovinné (`${…:-}`), takže stack naběhne i bez nich.
-
-`SERVER_IP` (jde do TLS certifikátu Caddy) a `WEBUI_URL` skript vyplní podle IP adresy rozhraní s výchozí trasou.
-
-**Očekávaný výstup (zkráceno):**
-```
-==> 0/7 Pre-flight checks
-  [OK] Ubuntu 24.04.5 LTS
-  [OK] Free space on /var: 39 GB
-...
-==> 2/7 Docker Engine and Docker Compose (official repository)
-  [OK] Docker GPG key verified (9DC858229FC7DD38854AE2D88D81803C0EBFCD88)
-  [OK] Docker Client 29.10.0 / Server 29.10.0
-...
-==> 6/7 Validate compose and pull images
-  [OK] docker-compose.yml is valid
-  [OK] All images are available locally:
-postgres:16.15  642MB
-ghcr.io/open-webui/open-webui:v0.12.5  6.45GB
-ghcr.io/berriai/litellm:v1.106.6  1.81GB
-alpine:3.24.3  13MB
-caddy:2.11.7  93.1MB
-  [OK] Caddyfile is valid (caddy:2.11.7)
-...
-Preparation complete. The stack is NOT running yet. Next steps (guide sections 6.5 and 7):
-```
-
-Skript vypisuje hlášky anglicky (`[OK]`, `[WARN]`, `[ERROR]`), stejně jako ostatní skripty v repu. Varování se na konci zopakují v souhrnu `Warnings:`.
-
-Celý výstup se ukládá do `/var/log/ai-stack-prepare.log` (práva 600). API klíč se do logu nedostane, protože `read -s` ho nevypisuje.
-
-### Ověření
-
-```bash
-docker image ls --format '{{.Repository}}:{{.Tag}}  {{.Size}}'
-ls -l /opt/ai-stack
-cut -d= -f1 /opt/ai-stack/.env | grep -v '^#' | grep .     # jen názvy proměnných
-```
-
-### Pokračování po přípravě
-
-Před prvním `up` ještě chybí virtual key pro Open WebUI. Compose by kvůli prázdné proměnné `OPENWEBUI_LITELLM_KEY` (`${…:?missing in .env}`) odmítl celý soubor, proto pro první start DB a LiteLLM předáme dočasnou hodnotu jen v prostředí příkazu:
-
-```bash
-cd /opt/ai-stack
-OPENWEBUI_LITELLM_KEY=pending docker compose up -d postgres litellm
-```
-
-Pak vytvořte virtual key podle kap. 7.1. Hodnotu ale **vyplňte do existujícího řádku** `OPENWEBUI_LITELLM_KEY=` (`WEBUI_SECRET_KEY` a `WEBUI_URL` už skript vygeneroval, `printf … >> .env` z kap. 7.1 by vytvořil duplicitní řádky). Nakonec spusťte `docker compose up -d`. Tím naběhne i Caddy. Při prvním startu vytvoří interní CA a certifikát pro `SERVER_IP`, další postup (export root certifikátu, důvěra na klientech) je v části 2, kap. 7.5–7.6.
-
-Stejně tak klíče pro část 2 (`ANTHROPIC_API_KEY`, `PROMPTGUARD_API_KEY`) doplňte do existujících prázdných řádků, ne příkazem `echo … >> .env` z části 2, kap. 1.
-
-> Open WebUI při prvním startu ještě stáhne z Hugging Face embedding model (~90 MB, kap. 7.3). Ten se stahuje až do volume běžícího kontejneru, takže ho skript předem nestáhne.
-
-### Opakované spuštění a server s běžícím stackem
-
-Skript je **idempotentní**. Po přerušení (výpadek sítě při stahování) ho stačí spustit znovu. Na serveru, kde stack už běží, nic nepřepíše ani nerestartuje. Referenční lab: `.env` měl před během i po něm stejný kontrolní součet a kontejnery běžely bez přerušení.
-
-> ⚠️ **Upgrade Dockeru = restart všech kontejnerů.** Při upgradu balíčku `docker-ce` se restartuje démon `dockerd` a s ním všechny kontejnery. Díky `restart: unless-stopped` se samy vrátí, ale LiteLLM a Open WebUI jsou zhruba minutu nedostupné. Přesně to se stalo při prvním testu skriptu v referenčním labu: `apt-get install docker-ce` povýšil 29.9.3 → 29.10.0. Skript proto už nainstalovaný Docker **nepovyšuje**: instaluje s `apt-get install --no-upgrade` a při `apt upgrade` Docker balíčky dočasně podrží (`apt-mark hold`). Docker povyšujte vědomě v servisním okně: `sudo apt-get install --only-upgrade docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin`.
-
-### Troubleshooting
-
-| Příznak | Příčina / řešení |
-|---|---|
-| `Run with sudo` / `Cannot determine the regular user` | Skript potřebuje root, ale zároveň musí znát uživatele, kterému patří `/opt/ai-stack`. Spouštějte `sudo ./prepare.sh` z běžného účtu, ne z `sudo -i`. Případně použijte `--user JMÉNO`. |
-| `Missing …/docker-compose.yml` | `prepare.sh` musí ležet ve stejném adresáři jako soubory z `deploy/`. |
-| `Docker GPG key fingerprint mismatch` | Stažený klíč není klíč Dockeru (proxy, MITM, změna klíče). Neinstalujte, ověřte fingerprint v [oficiální dokumentaci](https://docs.docker.com/engine/install/ubuntu/). |
-| `Attempt 1/3 failed: … compose pull` | Výpadek sítě nebo rate limit registru. Skript to zkusí znovu, případně ho spusťte celý znovu; už stažené vrstvy se nestahují. |
-| `No terminal – OPENROUTER_API_KEY is empty` | Skript běžel bez TTY (např. `ssh server 'sudo ./prepare.sh'`). Klíč doplňte podle kap. 6.1, nebo spusťte `ssh -t`. |
-| `Port 443 is in use` | Na serveru už běží jiný web server (apache2, nginx). Caddy by nenastartoval: `sudo ss -tlnp 'sport = :443'`, cizí službu zastavte nebo přesuňte. |
-| `Caddyfile is not valid` | Chyba v `Caddyfile` (překlep, chybějící závorka). Řádek s chybou je v hlášce, oprava v repu a znovu spustit skript. |
-| `Cannot detect the server IP` | Server nemá výchozí trasu. Doplňte `SERVER_IP` a `WEBUI_URL` v `.env` ručně. |
 

@@ -1,0 +1,143 @@
+# AI stack – STAGE 5-local-model: part 2, module G – + local model (final state)
+# Location on the server: /opt/ai-stack/docker-compose.yml
+# Secrets are loaded from /opt/ai-stack/.env (template: .env.example).
+# Stages: deploy/stages/README.md
+
+name: ai-stack
+
+# Shared logging settings: rotation, so container logs do not fill up the disk.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  postgres:
+    # Pinned version – never "latest". A minor upgrade (16.x) is safe,
+    # a major upgrade (16 -> 17) requires dump/restore.
+    image: postgres:16.15
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?missing in .env}
+      POSTGRES_DB: litellm
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # No "ports:" – the database is reachable only from the internal ai-net network.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm -d litellm"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [ai-net]
+    logging: *default-logging
+
+  litellm:
+    image: ghcr.io/berriai/litellm:v1.106.6
+    restart: unless-stopped
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?missing in .env}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:?missing in .env}
+      DATABASE_URL: postgresql://litellm:${POSTGRES_PASSWORD}@postgres:5432/litellm
+      UI_USERNAME: ${UI_USERNAME:-admin}
+      UI_PASSWORD: ${UI_PASSWORD:?missing in .env}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?missing in .env}
+      # Part 2, module A: Anthropic key. Empty = the Claude models return an
+      # authentication error, the rest of the stack works.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Part 2, module E: PromptGuard key. LiteLLM REFUSES TO START when the
+      # promptguard guardrail has an empty key, hence the placeholder default:
+      # the stack starts, only requests asking for "promptguard" are blocked.
+      PROMPTGUARD_API_KEY: ${PROMPTGUARD_API_KEY:-not-configured}
+      # Local model server (part 2, module G), e.g. http://<MODEL_SERVER_IP>:11434
+      LOCAL_LLM_API_BASE: ${LOCAL_LLM_API_BASE:-}
+      LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY:-}
+      # Do not load a .env inside the container – compose supplies the variables.
+      LITELLM_MODE: PRODUCTION
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+    ports:
+      # Exposed to the lab network (API /v1 and Admin UI /ui).
+      # For host-only access: "127.0.0.1:4000:4000"
+      - "4000:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      # The image has no curl/wget, hence Python.
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:4000/health/liveliness', timeout=5).status == 200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    networks: [ai-net]
+    logging: *default-logging
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:v0.12.5
+    restart: unless-stopped
+    environment:
+      # Connection to LiteLLM over the internal Docker network (service name = DNS name).
+      # NOTE: OPENAI_API_* are "ConfigVar"s – read only on the FIRST start,
+      # after that the values stored in the DB apply (Admin Panel → Settings → Connections).
+      OPENAI_API_BASE_URL: http://litellm:4000/v1
+      # Virtual key from LiteLLM, NOT the master key.
+      OPENAI_API_KEY: ${OPENWEBUI_LITELLM_KEY:?missing in .env}
+      # We do not use Ollama in the lab – otherwise the UI logs connection errors.
+      ENABLE_OLLAMA_API: "False"
+      # Signs session tokens (JWT). Changing it logs out all users.
+      WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:?missing in .env}
+      WEBUI_URL: ${WEBUI_URL:-http://localhost:3000}
+      # New users (after the first admin) wait for admin approval.
+      DEFAULT_USER_ROLE: pending
+    volumes:
+      - open-webui-data:/app/backend/data
+    ports:
+      - "3000:8080"
+    depends_on:
+      litellm:
+        condition: service_healthy
+    healthcheck:
+      # Same test as built into the image – stated explicitly for clarity.
+      test: ["CMD-SHELL", "curl --silent --fail http://localhost:8080/health | jq -ne 'input.status == true' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    networks: [ai-net]
+    logging: *default-logging
+
+  caddy:
+    # HTTPS reverse proxy (part 2, module F0). Pinned version – never "latest".
+    image: caddy:2.11.7
+    restart: unless-stopped
+    environment:
+      # IP address the clients use; it goes into the TLS certificate (SAN).
+      SERVER_IP: ${SERVER_IP:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # caddy-data holds the internal CA (root key!) and issued certificates –
+      # include it in backups; losing it means re-importing a new root on clients.
+      - caddy-data:/data
+      - caddy-config:/config
+    ports:
+      - "443:443"     # Open WebUI
+      - "8443:8443"   # LiteLLM API + Admin UI
+    depends_on:
+      litellm:
+        condition: service_healthy
+      open-webui:
+        condition: service_healthy
+    networks: [ai-net]
+    logging: *default-logging
+
+volumes:
+  pgdata:
+  open-webui-data:
+  caddy-data:
+  caddy-config:
+
+networks:
+  ai-net:

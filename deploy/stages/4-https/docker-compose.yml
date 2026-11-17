@@ -1,6 +1,7 @@
-# AI stack: Open WebUI -> LiteLLM Proxy -> OpenRouter; PostgreSQL for LiteLLM
+# AI stack – STAGE 4-https: part 2, module F0 – + Caddy HTTPS reverse proxy
 # Location on the server: /opt/ai-stack/docker-compose.yml
 # Secrets are loaded from /opt/ai-stack/.env (template: .env.example).
+# Stages: deploy/stages/README.md
 
 name: ai-stack
 
@@ -43,13 +44,13 @@ services:
       UI_USERNAME: ${UI_USERNAME:-admin}
       UI_PASSWORD: ${UI_PASSWORD:?missing in .env}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?missing in .env}
-      # Part 2 of the training (optional for part 1 – empty value = the Claude
-      # models / PromptGuard guardrail return an authentication error).
+      # Part 2, module A: Anthropic key. Empty = the Claude models return an
+      # authentication error, the rest of the stack works.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      PROMPTGUARD_API_KEY: ${PROMPTGUARD_API_KEY:-}
-      # Local model server (part 2, module G), e.g. http://<MODEL_SERVER_IP>:11434
-      LOCAL_LLM_API_BASE: ${LOCAL_LLM_API_BASE:-}
-      LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY:-}
+      # Part 2, module E: PromptGuard key. LiteLLM REFUSES TO START when the
+      # promptguard guardrail has an empty key, hence the placeholder default:
+      # the stack starts, only requests asking for "promptguard" are blocked.
+      PROMPTGUARD_API_KEY: ${PROMPTGUARD_API_KEY:-not-configured}
       # Do not load a .env inside the container – compose supplies the variables.
       LITELLM_MODE: PRODUCTION
     volumes:

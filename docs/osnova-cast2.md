@@ -1,11 +1,21 @@
 # Osnova – Část 2: Používání a správa AI gateway
 
 Navazuje na `docs/navod.md` (instalace LiteLLM + Open WebUI). Výsledný návod: `docs/navod-cast2.md`.
-Stav labu na začátku: LiteLLM v1.106.6, Open WebUI v0.12.5, PostgreSQL 16.15, jeden model přes OpenRouter.
+Stav labu na začátku: LiteLLM v1.106.6, Open WebUI v0.12.5, PostgreSQL 16.15, jeden model přes OpenRouter (konfigurace fáze `1-base`).
+Konfigurace se mění po fázích (`deploy/stages/`): A → `2-models`, E → `3-guardrails`, F0 → `4-https`, G → `5-local-model`.
+Písmena modulů odpovídají pořadí výuky; starší záznamy v `command-log.md` mají původní značení (A Open WebUI, B uživatelé, C modely).
 
 Každý krok v návodu: co a proč, příkaz, očekávaný výstup, ověření, typické problémy.
 
-## Modul A: Open WebUI pro uživatele
+## Modul A: Přidávání modelů v LiteLLM
+- přímý poskytovatel Anthropic (vlastní API klíč) + stávající OpenRouter
+- `model_name` jako alias, výměna poskytovatele bez zásahu do klientů
+- `config.yaml` (verzované) vs. Admin UI / API (`store_model_in_db`)
+- fallbacks a load balancing, ceny modelů a spend tracking
+- konfigurace fáze `2-models` (`./use-stage.sh 2-models`)
+- **Lab:** přidat Claude modely (Anthropic) a další free model, nastavit fallback, otestovat
+
+## Modul B: Open WebUI pro uživatele
 - chat: výběr modelu, systémový prompt, parametry (temperature, max tokens), historie, sdílení, export
 - porovnání modelů vedle sebe (multi-model chat)
 - knihovna promptů (`/` příkazy), proměnné v promptech
@@ -13,17 +23,10 @@ Každý krok v návodu: co a proč, příkaz, očekávaný výstup, ověření, 
 - *(RAG / Knowledge vyřazeno)*
 - **Lab:** asistent „IT helpdesk CZ“ s vlastním systémovým promptem a promptovou knihovnou
 
-## Modul B: Uživatelé, skupiny, přístup k modelům
+## Modul C: Uživatelé, skupiny, přístup k modelům
 - role admin / user / pending, schvalování, ruční zakládání účtů
 - skupiny a viditelnost modelů a asistentů
 - **Lab:** skupina „Pilot“ vidí jen vybrané modely
-
-## Modul C: Přidávání modelů v LiteLLM
-- přímý poskytovatel Anthropic (vlastní API klíč) + stávající OpenRouter
-- `model_name` jako alias, výměna poskytovatele bez zásahu do klientů
-- `config.yaml` (verzované) vs. Admin UI / API (`store_model_in_db`)
-- fallbacks a load balancing, ceny modelů a spend tracking
-- **Lab:** přidat Claude modely (Anthropic) a další free model, nastavit fallback, otestovat
 
 ## Modul D: Klíče, týmy, budgety, rate limity
 - týmy a interní uživatelé, klíč per tým / uživatel / aplikace
@@ -31,7 +34,7 @@ Každý krok v návodu: co a proč, příkaz, očekávaný výstup, ověření, 
 - reporting útraty (UI, `/spend/*`)
 - **Lab:** klíč s RPM limitem → 429; klíč s budgetem → vyčerpání
 
-## Modul E: Guardrails
+## Modul E: Guardrails (fáze `3-guardrails`)
 - koncept: `pre_call` / `post_call` / `during_call`, `default_on`, zapnutí per klíč / per request, fail-open vs. fail-closed
 - **vestavěný content filter** LiteLLM (`litellm_content_filter`): blokovaná slova, regex (platební karty, rodná čísla, API klíče), blokovat vs. maskovat
 - **PromptGuard** (`guardrail: promptguard`, SaaS, free tier 5 USD/měsíc): prompt injection, jailbreak, PII, secrets, data exfiltration
@@ -40,7 +43,7 @@ Každý krok v návodu: co a proč, příkaz, očekávaný výstup, ověření, 
 - *(Presidio vyřazeno)*
 - **Lab:** zablokovat odeslání „tajných“ dat, maskovat PII, zachytit prompt injection, ověřit v logu
 
-## Modul F0: HTTPS pro gateway (předpoklad pro Claude Desktop)
+## Modul F0: HTTPS pro gateway (fáze `4-https`, předpoklad pro Claude Desktop)
 - reverse proxy Caddy v compose, TLS certifikát (interní CA Caddy, případně AD CS)
 - důvěra v CA na klientech (macOS Keychain, Windows cert store, `NODE_EXTRA_CA_CERTS` pro Claude Code)
 - streaming bez bufferování, timeouty, `trusted_proxy_ranges`
@@ -53,7 +56,7 @@ Každý krok v návodu: co a proč, příkaz, očekávaný výstup, ověření, 
 - *(Cursor vyřazen – volá gateway ze svých cloudových serverů, lab není dostupný z internetu)*
 - **Lab:** každý účastník dostane vlastní virtual key a připojí klienty; útrata per klíč v LiteLLM
 
-## Modul G: Lokální model přes AI gateway
+## Modul G: Lokální model přes AI gateway (fáze `5-local-model`)
 - sdílený model server (lektor): Ollama + Qwen3 4B Instruct na CPU, Caddy s API klíčem (`docs/model-server.md`)
 - LiteLLM: `ollama_chat/`, `api_base`, `api_key`, `think: false`, nulová cena, alias `qwen-local`
 - guardrails a fallbacky u lokálního modelu (kam smí data odejít)

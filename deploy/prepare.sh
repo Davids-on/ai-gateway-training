@@ -12,12 +12,15 @@
 #      needs beyond the "required"/"important" packages is installed first)
 #   3. Docker Engine + Compose from the official repository (GPG fingerprint check)
 #   4. adds the user to the docker group
-#   5. /opt/ai-stack: docker-compose.yml, config.yaml, Caddyfile, .env.example
+#   5. /opt/ai-stack: docker-compose.yml + config.yaml of stage 1-base
+#      (deploy/stages/, part 1 of the guide), .env.example and the helper
+#      scripts set-env.sh and use-stage.sh. Existing configuration files are
+#      NEVER overwritten (the stack may already be at a later stage).
 #   6. .env with generated secrets and SERVER_IP (existing values are NEVER
 #      overwritten); asks for the OpenRouter key and the optional part-2 keys
 #      (Anthropic, PromptGuard)
-#   7. validates compose and the Caddyfile, pulls ALL images
-#      (docker compose pull: postgres, litellm, open-webui, caddy + alpine)
+#   7. validates compose and the Caddyfile, pulls ALL images of ALL stages
+#      (postgres, litellm, open-webui, caddy + alpine)
 #
 # What the script does NOT do: start the stack containers (docker compose up),
 # create the Open WebUI virtual key (LiteLLM must be running for that), create
@@ -25,7 +28,8 @@
 # certificate is exported afterwards), reboot the server, or upgrade an already
 # installed Docker (that would restart all running containers).
 #
-# Usage (on the server, as a regular user with sudo, from the deploy/ directory):
+# Usage (on the server, as a regular user with sudo, from the deploy/ directory
+# of the training repository, cloned to ~/ai-gateway-training):
 #   sudo ./prepare.sh                 # everything, asks for the API keys
 #   sudo ./prepare.sh --skip-upgrade  # skip apt upgrade (saves time/bandwidth)
 #   sudo ./prepare.sh --no-extras     # skip the optional troubleshooting tools
@@ -44,8 +48,13 @@ DOCKER_GPG_FPR=9DC858229FC7DD38854AE2D88D81803C0EBFCD88
 # Images outside compose that the guide uses (backup/restore, section 8.4)
 EXTRA_IMAGES=(alpine:3.24.3)
 MIN_FREE_GB=17
-# Files copied from deploy/ to $STACK_DIR
-DEPLOY_FILES=(docker-compose.yml config.yaml Caddyfile .env.example)
+# Configuration of stage 1-base (part 1 of the guide) – installed only if missing
+FIRST_STAGE=stages/1-base
+STAGE_FILES=(docker-compose.yml config.yaml)
+# Final stage – used to pull the images of ALL stages and to validate the Caddyfile
+FINAL_STAGE=stages/5-local-model
+# Helper files from deploy/ – always kept up to date (previous version backed up)
+TOOL_FILES=(.env.example set-env.sh use-stage.sh)
 # Ports published by the stack: Open WebUI, LiteLLM, Caddy HTTPS (Open WebUI, LiteLLM)
 STACK_PORTS=(3000 4000 443 8443)
 # Packages the script and the guide need (missing on a minimized install):
@@ -108,7 +117,7 @@ done
 [[ -n $TARGET_USER && $TARGET_USER != root ]] \
   || die "Cannot determine the regular user. Run as 'sudo $0' (not from a root shell) or use --user NAME."
 id "$TARGET_USER" >/dev/null 2>&1 || die "User $TARGET_USER does not exist."
-for f in "${DEPLOY_FILES[@]}"; do
+for f in "${STAGE_FILES[@]/#/$FIRST_STAGE/}" "${TOOL_FILES[@]}" "$FINAL_STAGE/docker-compose.yml" "$FINAL_STAGE/Caddyfile"; do
   [[ -f $SCRIPT_DIR/$f ]] || die "Missing $SCRIPT_DIR/$f – run the script from the repository's deploy/ directory."
 done
 
@@ -247,8 +256,23 @@ fi
 step "4/7 Working directory $STACK_DIR"
 # =============================================================================
 install -d -o "$TARGET_USER" -g "$TARGET_USER" -m 750 "$STACK_DIR"
-for f in "${DEPLOY_FILES[@]}"; do
-  dst=$STACK_DIR/$f
+# Configuration: stage 1-base, only where nothing exists yet. A different
+# existing file means the stack has moved on (part 2 uses use-stage.sh) – keep it.
+for f in "${STAGE_FILES[@]}"; do
+  src=$SCRIPT_DIR/$FIRST_STAGE/$f dst=$STACK_DIR/$f
+  if [[ ! -f $dst ]]; then
+    install -o "$TARGET_USER" -g "$TARGET_USER" -m 640 "$src" "$dst"
+    ok "$f installed (stage 1-base)"
+  elif cmp -s "$src" "$dst"; then
+    ok "$f is at stage 1-base"
+  else
+    ok "$f already exists and differs from stage 1-base – keeping it (later stage or local change)"
+  fi
+done
+# Helper files: keep them current, back up a differing previous version
+for f in "${TOOL_FILES[@]}"; do
+  dst=$STACK_DIR/$f mode=640
+  [[ $f == *.sh ]] && mode=750
   if [[ -f $dst ]] && cmp -s "$SCRIPT_DIR/$f" "$dst"; then
     ok "$f is up to date"
     continue
@@ -258,7 +282,7 @@ for f in "${DEPLOY_FILES[@]}"; do
     cp -p "$dst" "$bak"
     warn "$f differed from the repository – previous version backed up to $bak"
   fi
-  install -o "$TARGET_USER" -g "$TARGET_USER" -m 640 "$SCRIPT_DIR/$f" "$dst"
+  install -o "$TARGET_USER" -g "$TARGET_USER" -m "$mode" "$SCRIPT_DIR/$f" "$dst"
   ok "$f installed"
 done
 
@@ -362,11 +386,13 @@ compose() {
 }
 compose config --quiet
 ok "docker-compose.yml is valid"
-
-mapfile -t IMAGES < <(compose config --images)
+# Images of the FINAL stage = images of all stages (Caddy is added in part 2,
+# module F0). The final compose file is read with $STACK_DIR as the project
+# directory, so it uses the same .env.
+mapfile -t IMAGES < <(compose -f "$SCRIPT_DIR/$FINAL_STAGE/docker-compose.yml" \
+                              --project-directory "$STACK_DIR" config --images)
 printf '  Pulling: %s\n' "${IMAGES[@]}" "${EXTRA_IMAGES[@]}"
-retry 3 compose pull
-for img in "${EXTRA_IMAGES[@]}"; do retry 3 docker pull -q "$img"; done
+for img in "${IMAGES[@]}" "${EXTRA_IMAGES[@]}"; do retry 3 docker pull -q "$img"; done
 for img in "${IMAGES[@]}" "${EXTRA_IMAGES[@]}"; do
   docker image inspect "$img" >/dev/null || die "Image $img is missing even after pull"
 done
@@ -378,7 +404,7 @@ docker image ls --format '      {{.Repository}}:{{.Tag}}  {{.Size}}' \
 caddy_image=$(printf '%s\n' "${IMAGES[@]}" | grep -m1 '^caddy:' || true)
 if [[ -n $caddy_image ]]; then
   if out=$(docker run --rm -e SERVER_IP="$(env_value SERVER_IP)" \
-             -v "$STACK_DIR/Caddyfile:/etc/caddy/Caddyfile:ro" "$caddy_image" \
+             -v "$SCRIPT_DIR/$FINAL_STAGE/Caddyfile:/etc/caddy/Caddyfile:ro" "$caddy_image" \
              caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile 2>&1); then
     ok "Caddyfile is valid ($caddy_image)"
   else
@@ -415,21 +441,20 @@ fi
 
 cat <<EOF
 
-Preparation complete. The stack is NOT running yet. Next steps (guide sections 6.5 and 7):
+Preparation complete. The stack is NOT running yet. Next steps (part 1 of the
+guide, sections 6.5 and 7):
 
   0) Log out and log in again (docker group), or reboot the server.
-  1) If OPENROUTER_API_KEY is missing in .env, set it (guide section 6.1).
+  1) If OPENROUTER_API_KEY is missing in .env:  cd $STACK_DIR && ./set-env.sh OPENROUTER_API_KEY
   2) Start the DB and LiteLLM (OPENWEBUI_LITELLM_KEY is still empty, hence a dummy value):
        cd $STACK_DIR
        OPENWEBUI_LITELLM_KEY=pending docker compose up -d postgres litellm
-  3) Create the Open WebUI virtual key (guide section 7.1) and put its value into
-     the EXISTING line OPENWEBUI_LITELLM_KEY= in .env (do not add a second line;
-     WEBUI_SECRET_KEY and WEBUI_URL have already been generated by this script).
+  3) Create the Open WebUI virtual key (guide section 7.1); the guide stores it
+     with:  ... | ./set-env.sh OPENWEBUI_LITELLM_KEY
   4) Start the whole stack:  docker compose up -d
-     Caddy creates its internal CA on first start. Export the root certificate
-     and import it on the clients (part 2, sections 7.5–7.6):
-       https://$(env_value SERVER_IP)        -> Open WebUI
-       https://$(env_value SERVER_IP):8443   -> LiteLLM API + Admin UI
+
+Part 2 switches the configuration stage by stage:  ./use-stage.sh <stage>
+(images for all stages, including Caddy, are already downloaded).
 
 Note: on first start Open WebUI still downloads an embedding model from Hugging
 Face (~90 MB). Everything else is already downloaded. Log of this run: $LOG
