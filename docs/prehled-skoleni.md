@@ -27,7 +27,7 @@ Na konci školení má každý účastník:
 - HTTPS přes Caddy s vlastní CA,
 - připojené klienty: API (OpenAI i Anthropic formát), Claude Code, Codex CLI, Claude Desktop.
 
-**Verze v referenčním labu (listopad 2026):** LiteLLM `v1.106.6`, Open WebUI `v0.12.5`, PostgreSQL `16.15`, Caddy `2.11.7`, Alpine `3.24.3` (zálohy), Ollama `0.40.13` + `qwen3:4b-instruct` (model server), Docker 29.10 / Compose v5.7.
+**Verze v referenčním labu (listopad 2026):** LiteLLM `v1.106.6`, Open WebUI `v0.12.5`, PostgreSQL `16.15`, Caddy `2.11.7`, Alpine `3.24.3` (zálohy), Ollama `0.40.13` + `qwen3:4b-instruct` (model server), Docker 29.10 / Compose v5.8.
 
 ---
 
@@ -230,7 +230,7 @@ Klienty doporučuji nainstalovat předem (instalace přes firemní proxy nebo be
 - **Klienti:** Claude Code a Codex CLI nebyly v referenčním labu nainstalované, jejich konfigurace je podle oficiální dokumentace. Před školením projít na čisté stanici (viz checklist).
 - **Časový plán** v kap. 2 je odhad, změřit při zkušebním průchodu.
 - **Výkon model serveru** na 8 vCPU / 16 GB není změřený (referenční lab má 2 vCPU: ~4,5 tokenu/s). Změřit zátěžovým testem a podle výsledku upravit `OLLAMA_NUM_PARALLEL` nebo model.
-- **Firewall model serveru** (`DOCKER-USER`, `model-server.md` kap. 4.6) je podle dokumentace Dockeru, v referenčním labu neověřený.
+- **Firewall model serveru** (`DOCKER-USER`, `setup-model-server.sh --allow-cidr`) ověřen při zkušebním průchodu 17. 11. 2026: povolená síť projde, ostatní zdroje se zahodí, pravidla přežijí restart. Ručně zadaná pravidla z `model-server.md` kap. 4.6 (bez skriptu) restart nepřežijí.
 - **URL repozitáře:** v návodech je placeholder `<REPO_URL>`, po publikaci na GitHubu ho doplnit (`navod.md` kap. 6.1, `priprava-serveru.md`, tento přehled).
 - **Konfigurační fáze:** zdrojem pravdy je `deploy/stages/5-local-model/`, fáze 1–4 se z ní generují (`python3 deploy/stages/build-stages.py`). Po každé změně konfigurace skript spustit a změnu projít v `git diff`.
 - **Distribuce klíčů Anthropic/PromptGuard** na VM účastníků: rozhodnout model (sdílený vs. per VM) podle rozpočtu a počtu účastníků.

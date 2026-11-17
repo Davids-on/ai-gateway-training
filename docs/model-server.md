@@ -154,7 +154,7 @@ Očekávaný konec výstupu:
 
 Log běhu: `/var/log/local-llm-setup.log` (práva 600, bez klíče).
 
-> **Referenční lab:** Skript ověřen opakovaným spuštěním nad existujícím `/opt/local-llm` (`--skip-upgrade --yes`): konfigurace beze změny, kontejnery se nerestartovaly, 401/401/200, odpověď modelu, `n_slots = 2`. Krok s firewallem (`--allow-cidr`) v labu **neověřen** (stejně jako kap. 4.6). Na čisté VM ve školení skript projde i instalací Dockeru (stejný kód jako `deploy/prepare.sh`).
+> **Referenční lab:** Skript ověřen opakovaným spuštěním nad existujícím `/opt/local-llm` (`--skip-upgrade --yes`): konfigurace beze změny, kontejnery se nerestartovaly, 401/401/200, odpověď modelu, `n_slots = 2`. Zkušební průchod (17. 11. 2026, čistá VM): skript prošel celý včetně `--allow-cidr`. Z povolené sítě port 11434 projde, z jiné sítě se spojení zahodí (timeout) a pravidla v `DOCKER-USER` se po restartu VM obnoví (`local-llm-firewall.service`). Opakované spuštění s jiným `--allow-cidr` a `--parallel` pravidla nahradí bez duplicit. Na čisté VM ve školení skript projde i instalací Dockeru (stejný kód jako `deploy/prepare.sh`).
 
 
 ### 4.1 Docker
@@ -329,7 +329,7 @@ sudo iptables -L DOCKER-USER -n --line-numbers
 ```
 Pravidla nepřežijí restart (trvale přes `iptables-persistent` nebo skript po startu Dockeru). Jednodušší alternativa je ACL na úrovni sítě nebo hypervisoru (NSX, security group).
 
-> **Referenční lab:** Firewall jsme neměnili (stack i model server jsou na jedné VM). Pravidla výše jsou podle [dokumentace Dockeru](https://docs.docker.com/engine/network/packet-filtering-firewalls/), v labu neověřená.
+> **Referenční lab:** Stejná pravidla zakládá `setup-model-server.sh --allow-cidr` (kap. 4.0), tam jsou ověřená včetně obnovy po restartu. Ruční varianta výše vychází z [dokumentace Dockeru](https://docs.docker.com/engine/network/packet-filtering-firewalls/).
 
 ---
 

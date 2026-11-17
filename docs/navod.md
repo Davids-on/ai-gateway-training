@@ -486,8 +486,8 @@ docker run --rm hello-world
 
 **Očekávaný výstup:**
 ```
-Client 29.9.3 / Server 29.9.3
-Docker Compose version v5.7.1
+Client 29.10.0 / Server 29.10.0
+Docker Compose version v5.8.0
 
 Unable to find image 'hello-world:latest' locally
 latest: Pulling from library/hello-world
@@ -778,13 +778,12 @@ litellm_settings:
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   database_url: os.environ/DATABASE_URL
-  trusted_proxy_ranges: []
 ```
 
 Klíčové body:
 - **`model_name`** je veřejné jméno modelu. Klienti volají `nemotron-3-ultra` a nevědí, že za ním je OpenRouter. Až budete chtít model vyměnit, změníte jen `litellm_params.model`.
 - **`os.environ/…`** znamená, že hodnota se čte z proměnné prostředí. V `config.yaml` tak nejsou žádná tajemství a soubor lze verzovat v gitu.
-- **`trusted_proxy_ranges: []`**: klienti se připojují přímo, ne přes reverse proxy. LiteLLM proto nevěří hlavičce `X-Forwarded-For`, kterou by jinak šlo podvrhnout (obcházení limitu přihlášení na IP).
+- **`X-Forwarded-For` se nevěří:** klienti se připojují přímo, ne přes reverse proxy. LiteLLM proto ve výchozím stavu (`use_x_forwarded_for` vypnuté) hlavičku `X-Forwarded-For` ignoruje. Jinak by šla podvrhnout (obcházení limitu přihlášení na IP). Zapneme ji až za reverse proxy (část 2, kap. 7.8).
 
 ### 6.4 `docker-compose.yml`
 
@@ -888,8 +887,9 @@ První start LiteLLM trvá 30–60 s, protože provádí migrace DB schématu. S
 
 ```bash
 docker compose ps
-docker compose logs -f litellm         # Ctrl+C ukončí sledování
+OPENWEBUI_LITELLM_KEY=pending docker compose logs -f litellm    # Ctrl+C ukončí sledování
 ```
+Prefix `OPENWEBUI_LITELLM_KEY=pending` potřebuje i `docker compose logs` (stejně jako `config`, `pull`, `up`), protože kontroluje celý soubor. Bez něj skončí chybou `required variable OPENWEBUI_LITELLM_KEY is missing a value`. Od kap. 7.1, kdy je klíč v `.env`, už prefix není potřeba.
 ```
 NAME                  IMAGE                              ...   STATUS                    PORTS
 ai-stack-litellm-1    ghcr.io/berriai/litellm:v1.106.6   ...   Up 34 seconds (healthy)   0.0.0.0:4000->4000/tcp, [::]:4000->4000/tcp
@@ -1577,7 +1577,7 @@ Mimo rozsah školení zůstávají tato témata:
 | Komponenta | Verze |
 |---|---|
 | Ubuntu Server | 24.04 LTS, jádro 6.8.0-149 |
-| Docker Engine / Compose | 29.10.0 / v5.7.1 (ukázky výstupů v kap. 5 jsou z 29.9.3) |
+| Docker Engine / Compose | 29.10.0 / v5.8.0 |
 | LiteLLM | `ghcr.io/berriai/litellm:v1.106.6` |
 | PostgreSQL | `postgres:16.15` |
 | Open WebUI | `ghcr.io/open-webui/open-webui:v0.12.5` |

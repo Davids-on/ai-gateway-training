@@ -981,7 +981,9 @@ cd /opt/ai-stack
 ./use-stage.sh 3-guardrails
 docker compose restart litellm
 docker compose ps litellm          # počkat na (healthy)
-docker compose logs --since 3m litellm | grep -i -E 'error|exception'   # nic
+# chyby jen od posledního startu kontejneru (starší řádky jsou z předchozích testů, např. 429 z modulu D)
+docker compose logs --since "$(docker inspect -f '{{.State.StartedAt}}' ai-stack-litellm-1)" litellm \
+  | grep -i -E 'error|exception'   # nic
 ```
 
 ### 6.4 Ověření
@@ -1468,13 +1470,20 @@ INFO:     172.18.0.5:46674 - "POST /v1/messages HTTP/1.1" 200 OK
 ```
 Skutečnou IP klienta posílá Caddy v hlavičce `X-Forwarded-For`. LiteLLM ji použije (spend log `requester_ip_address`, IP allowlist `allowed_ips`) jen po zapnutí `use_x_forwarded_for: true` v `general_settings`. LiteLLM v1.106.6 ale v tomto režimu hlavičku převezme **bez kontroly, kdo ji poslal**. Dokud je port 4000 dostupný napřímo, mohl by si ji kdokoli podvrhnout. Proto ji zapneme až v rámci uzavření portů (kap. 7.8).
 
+> [!NOTE]
+> **Zkušební průchod (listopad 2026):** S `use_x_forwarded_for: true` uložil LiteLLM v1.106.6 do spend logu `requester_ip_address` jako prázdnou hodnotu (NULL), a to i u requestu s ručně zadanou hlavičkou `X-Forwarded-For`. Bez této volby se ukládala IP kontejneru Caddy. Skutečná IP klienta se tedy ve spend logu této verze neobjeví. Ověření:
+> ```bash
+> docker compose exec -T postgres psql -U litellm -tAc \
+>   'select "startTime", requester_ip_address from "LiteLLM_SpendLogs" order by "startTime" desc limit 3'
+> ```
+
 </details>
 
 ### 7.8 Uzavření přímých portů (provedeme na konci školení)
 
 Až budou všichni klienti přepnutí na HTTPS a po modulu G (poslední fáze konfigurace; `use-stage.sh` by tyto ruční úpravy přepsal):
 1. v `docker-compose.yml` změnit `"4000:4000"` na `"127.0.0.1:4000:4000"` a `"3000:8080"` na `"127.0.0.1:3000:8080"`,
-2. v `.env` nastavit `WEBUI_URL=https://<SERVER_IP>`,
+2. adresu Open WebUI změnit na `https://<SERVER_IP>` v **Admin Panel → Settings → General → WebUI URL** (uložit tlačítkem *Save*) a pro pořádek i v `.env` (`./set-env.sh WEBUI_URL https://<SERVER_IP>`). `WEBUI_URL` je ConfigVar (část 1, kap. 7.2): Open WebUI ho po prvním startu čte z vlastní databáze, takže samotná změna v `.env` se neprojeví (ověřeno ve zkušebním průchodu),
 3. v `config.yaml` přidat do `general_settings` `use_x_forwarded_for: true`,
 4. `docker compose up -d` a `docker compose restart litellm`,
 5. ověřit, že `http://<SERVER_IP>:4000` a `:3000` z jiného počítače nejsou dostupné.

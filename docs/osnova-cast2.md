@@ -46,7 +46,7 @@ Každý krok v návodu: co a proč, příkaz, očekávaný výstup, ověření, 
 ## Modul F0: HTTPS pro gateway (fáze `4-https`, předpoklad pro Claude Desktop)
 - reverse proxy Caddy v compose, TLS certifikát (interní CA Caddy, případně AD CS)
 - důvěra v CA na klientech (macOS Keychain, Windows cert store, `NODE_EXTRA_CA_CERTS` pro Claude Code)
-- streaming bez bufferování, timeouty, `trusted_proxy_ranges`
+- streaming bez bufferování, timeouty, `use_x_forwarded_for`
 
 ## Modul F: Integrace klientů
 - **API obecně:** curl, Python `openai` SDK, Anthropic SDK (`/v1/messages`), tahák base URL / klíč / model
