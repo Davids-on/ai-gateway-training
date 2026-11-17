@@ -1,26 +1,32 @@
 #!/usr/bin/env bash
 # =============================================================================
-# prepare.sh – full server preparation for the AI stack (LiteLLM + Open WebUI)
+# prepare.sh – full server preparation for the AI stack
+#              (LiteLLM + Open WebUI + PostgreSQL + Caddy HTTPS proxy)
 #              WITHOUT starting the stack itself.
 #
-# What the script does (matches sections 4–6 of the guide docs/navod.md):
+# What the script does (matches sections 4–6 of docs/navod.md and the server
+# side of docs/navod-cast2.md, incl. module F0 – HTTPS via Caddy):
 #   1. checks the OS, free disk space and ports
 #   2. system update (apt upgrade), base packages, time zone, port check
 #      (works on a minimized Ubuntu Server install – every command the script
 #      needs beyond the "required"/"important" packages is installed first)
 #   3. Docker Engine + Compose from the official repository (GPG fingerprint check)
 #   4. adds the user to the docker group
-#   5. /opt/ai-stack: docker-compose.yml, config.yaml, .env.example
-#   6. .env with generated secrets (existing values are NEVER overwritten)
-#   7. validates compose and pulls ALL images (docker compose pull + alpine)
+#   5. /opt/ai-stack: docker-compose.yml, config.yaml, Caddyfile, .env.example
+#   6. .env with generated secrets and SERVER_IP (existing values are NEVER
+#      overwritten); asks for the OpenRouter key and the optional part-2 keys
+#      (Anthropic, PromptGuard)
+#   7. validates compose and the Caddyfile, pulls ALL images
+#      (docker compose pull: postgres, litellm, open-webui, caddy + alpine)
 #
 # What the script does NOT do: start the stack containers (docker compose up),
-# create the Open WebUI virtual key (LiteLLM must be running for that), reboot
-# the server, or upgrade an already installed Docker (that would restart all
-# running containers).
+# create the Open WebUI virtual key (LiteLLM must be running for that), create
+# Caddy's internal CA (it is generated on Caddy's first start, the root
+# certificate is exported afterwards), reboot the server, or upgrade an already
+# installed Docker (that would restart all running containers).
 #
 # Usage (on the server, as a regular user with sudo, from the deploy/ directory):
-#   sudo ./prepare.sh                 # everything, asks for the OpenRouter API key
+#   sudo ./prepare.sh                 # everything, asks for the API keys
 #   sudo ./prepare.sh --skip-upgrade  # skip apt upgrade (saves time/bandwidth)
 #   sudo ./prepare.sh --no-extras     # skip the optional troubleshooting tools
 #   sudo ./prepare.sh --help
@@ -30,13 +36,18 @@
 set -Eeuo pipefail
 
 # --- Settings ---------------------------------------------------------------
-STACK_DIR=/opt/ai-stack
+# Target directory; can be overridden for testing:  sudo STACK_DIR=/tmp/x ./prepare.sh
+STACK_DIR=${STACK_DIR:-/opt/ai-stack}
 TZ_NAME=Europe/Prague
 # Docker GPG key fingerprint as published at https://docs.docker.com/engine/install/ubuntu/
 DOCKER_GPG_FPR=9DC858229FC7DD38854AE2D88D81803C0EBFCD88
 # Images outside compose that the guide uses (backup/restore, section 8.4)
 EXTRA_IMAGES=(alpine:3.24.3)
-MIN_FREE_GB=15
+MIN_FREE_GB=17
+# Files copied from deploy/ to $STACK_DIR
+DEPLOY_FILES=(docker-compose.yml config.yaml Caddyfile .env.example)
+# Ports published by the stack: Open WebUI, LiteLLM, Caddy HTTPS (Open WebUI, LiteLLM)
+STACK_PORTS=(3000 4000 443 8443)
 # Packages the script and the guide need (missing on a minimized install):
 #   curl, ca-certificates – Docker GPG key, API tests;  gnupg – key fingerprint check
 #   jq – JSON output;  openssl – secrets;  iproute2 – ss/ip;  tzdata – time zones
@@ -97,7 +108,7 @@ done
 [[ -n $TARGET_USER && $TARGET_USER != root ]] \
   || die "Cannot determine the regular user. Run as 'sudo $0' (not from a root shell) or use --user NAME."
 id "$TARGET_USER" >/dev/null 2>&1 || die "User $TARGET_USER does not exist."
-for f in docker-compose.yml config.yaml .env.example; do
+for f in "${DEPLOY_FILES[@]}"; do
   [[ -f $SCRIPT_DIR/$f ]] || die "Missing $SCRIPT_DIR/$f – run the script from the repository's deploy/ directory."
 done
 
@@ -165,7 +176,7 @@ timedatectl set-timezone "$TZ_NAME"
 ok "Time zone: $(timedatectl show -p Timezone --value)"
 
 # Port check (needs ss from iproute2, installed above)
-for p in 3000 4000; do
+for p in "${STACK_PORTS[@]}"; do
   if ss -Htln "sport = :$p" | grep -q .; then
     # The port may be held by an already running ai-stack – that is fine
     if command -v docker >/dev/null && docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^ai-stack-'; then
@@ -236,7 +247,7 @@ fi
 step "4/7 Working directory $STACK_DIR"
 # =============================================================================
 install -d -o "$TARGET_USER" -g "$TARGET_USER" -m 750 "$STACK_DIR"
-for f in docker-compose.yml config.yaml .env.example; do
+for f in "${DEPLOY_FILES[@]}"; do
   dst=$STACK_DIR/$f
   if [[ -f $dst ]] && cmp -s "$SCRIPT_DIR/$f" "$dst"; then
     ok "$f is up to date"
@@ -277,30 +288,42 @@ env_set() {  # set a value (replace/append the line); the value goes via ENVIRON
   fi
 }
 
-# --- OpenRouter API key: ask if missing and running in a terminal -----------
-if [[ -n $(env_value OPENROUTER_API_KEY) ]]; then
-  ok "OPENROUTER_API_KEY is already set – keeping it"
-elif [[ -r /dev/tty ]] && { : < /dev/tty; } 2>/dev/null; then
-  printf '\n  Paste the OpenRouter API key (sk-or-v1-…) and press Enter.\n'
-  printf '  The key is not displayed. Empty Enter = fill it in later.\n'
-  IFS= read -rsp "  OpenRouter API key: " K < /dev/tty; echo
-  if [[ -z $K ]]; then
-    env_has OPENROUTER_API_KEY || printf 'OPENROUTER_API_KEY=\n' >> "$ENV_FILE"
-    warn "OPENROUTER_API_KEY left empty – set it before starting the stack (guide section 6.1)"
-  elif LC_ALL=C grep -q '[[:cntrl:][:space:]]' <<<"$K"; then
-    env_has OPENROUTER_API_KEY || printf 'OPENROUTER_API_KEY=\n' >> "$ENV_FILE"
-    warn "The key contains control characters or spaces (arrow keys, Home…?) – NOT saved, set it manually"
-  else
-    [[ $K == sk-or-v1-* && ${#K} -eq 73 ]] \
-      || warn "The key does not have the expected format (sk-or-v1-…, 73 characters) – please check it"
-    env_set OPENROUTER_API_KEY "$K"
-    ok "OPENROUTER_API_KEY saved (length ${#K}, prefix ${K:0:9})"
+# --- API keys: ask if missing and running in a terminal ---------------------
+HAVE_TTY=0
+if [[ -r /dev/tty ]] && { : < /dev/tty; } 2>/dev/null; then HAVE_TTY=1; fi
+
+# ask_key VAR "label" prefix length(0=any) required(1/0) "where to get it"
+ask_key() {
+  local var=$1 label=$2 prefix=$3 len=$4 required=$5 hint=$6 K
+  if [[ -n $(env_value "$var") ]]; then
+    ok "$var is already set – keeping it"; return
   fi
-  unset K
-else
-  env_has OPENROUTER_API_KEY || printf 'OPENROUTER_API_KEY=\n' >> "$ENV_FILE"
-  warn "No terminal – set OPENROUTER_API_KEY manually (guide section 6.1)"
-fi
+  env_has "$var" || printf '%s=\n' "$var" >> "$ENV_FILE"
+  local later="set it before starting the stack"
+  (( required )) || later="optional – needed only for part 2 of the training"
+  if (( ! HAVE_TTY )); then
+    warn "No terminal – $var is empty ($later; $hint)"; return
+  fi
+  printf '\n  %s (%s…), then press Enter.\n' "$label" "$prefix"
+  printf '  The key is not displayed. Empty Enter = fill it in later.\n'
+  IFS= read -rsp "  $label: " K < /dev/tty; echo
+  if [[ -z $K ]]; then
+    warn "$var left empty ($later; $hint)"
+  elif LC_ALL=C grep -q '[[:cntrl:][:space:]]' <<<"$K"; then
+    warn "$var contains control characters or spaces (arrow keys, Home…?) – NOT saved, set it manually"
+  else
+    if [[ $K != "$prefix"* ]] || (( len && ${#K} != len )); then
+      local fmt="${prefix}…"; (( len )) && fmt+=", $len characters"
+      warn "$var does not have the expected format ($fmt) – please check it"
+    fi
+    env_set "$var" "$K"
+    ok "$var saved (length ${#K}, prefix ${K:0:${#prefix}})"
+  fi
+}
+
+ask_key OPENROUTER_API_KEY  "OpenRouter API key"  sk-or-v1- 73 1 "guide section 6.1"
+ask_key ANTHROPIC_API_KEY   "Anthropic API key"   sk-ant-    0 0 "part 2, section 1"
+ask_key PROMPTGUARD_API_KEY "PromptGuard API key" pg_        0 0 "part 2, section 1"
 
 # --- Generated secrets (existing values are never overwritten) --------------
 env_add LITELLM_MASTER_KEY "sk-$(openssl rand -hex 32)"
@@ -310,6 +333,9 @@ env_add UI_PASSWORD        "$(openssl rand -base64 18 | tr -d '/+=')"
 env_add POSTGRES_PASSWORD  "$(openssl rand -hex 24)"
 env_add WEBUI_SECRET_KEY   "$(openssl rand -hex 32)"
 server_ip=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1;i<NF;i++) if ($i=="src") {print $(i+1); exit}}')
+[[ -n $server_ip ]] || warn "Cannot detect the server IP – set SERVER_IP and WEBUI_URL in .env manually"
+# SERVER_IP goes into Caddy's TLS certificate (SAN) – part 2, module F0
+env_add SERVER_IP          "${server_ip:-localhost}"
 env_add WEBUI_URL          "http://${server_ip:-localhost}:3000"
 # The virtual key can only be created once LiteLLM runs (guide section 7.1) – keep it
 # empty for now so Open WebUI cannot accidentally start without it (compose refuses).
@@ -347,6 +373,18 @@ done
 ok "All images are available locally:"
 docker image ls --format '      {{.Repository}}:{{.Tag}}  {{.Size}}' \
   | grep -E "$(printf '%s|' "${IMAGES[@]}" "${EXTRA_IMAGES[@]}" | sed 's/|$//; s/\./\\./g')"
+
+# Caddyfile syntax check in a throw-away container (the image is already local)
+caddy_image=$(printf '%s\n' "${IMAGES[@]}" | grep -m1 '^caddy:' || true)
+if [[ -n $caddy_image ]]; then
+  if out=$(docker run --rm -e SERVER_IP="$(env_value SERVER_IP)" \
+             -v "$STACK_DIR/Caddyfile:/etc/caddy/Caddyfile:ro" "$caddy_image" \
+             caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile 2>&1); then
+    ok "Caddyfile is valid ($caddy_image)"
+  else
+    die "Caddyfile is not valid: $(tail -1 <<<"$out")"
+  fi
+fi
 
 # =============================================================================
 step "7/7 Verify Docker"
@@ -388,6 +426,10 @@ Preparation complete. The stack is NOT running yet. Next steps (guide sections 6
      the EXISTING line OPENWEBUI_LITELLM_KEY= in .env (do not add a second line;
      WEBUI_SECRET_KEY and WEBUI_URL have already been generated by this script).
   4) Start the whole stack:  docker compose up -d
+     Caddy creates its internal CA on first start. Export the root certificate
+     and import it on the clients (part 2, sections 7.5–7.6):
+       https://$(env_value SERVER_IP)        -> Open WebUI
+       https://$(env_value SERVER_IP):8443   -> LiteLLM API + Admin UI
 
 Note: on first start Open WebUI still downloads an embedding model from Hugging
 Face (~90 MB). Everything else is already downloaded. Log of this run: $LOG

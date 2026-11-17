@@ -1375,22 +1375,33 @@ Osnova pro navazující části školení:
 
 ## 12. Příloha A: Automatická příprava serveru (`prepare.sh`)
 
-**Účel:** Na školení se nechceme dívat, jak se ~9 GB image stahuje přes sdílenou linku. Skript [`deploy/prepare.sh`](../deploy/prepare.sh) proto **předem** provede všechny přípravy z kapitol 4–6 a stáhne image. Samotný stack **nespouští**. To zůstává na účastnících (kap. 6.5 a dál).
+**Účel:** Na školení se nechceme dívat, jak se ~9 GB image stahuje přes sdílenou linku. Skript [`deploy/prepare.sh`](../deploy/prepare.sh) proto **předem** provede všechny přípravy z kapitol 4–6 a stáhne image. Připraví i serverovou část 2. části školení ([`navod-cast2.md`](navod-cast2.md)): reverse proxy Caddy pro HTTPS (modul F0) a místo v `.env` pro klíče Anthropic a PromptGuard. Samotný stack **nespouští**. To zůstává na účastnících (kap. 6.5 a dál).
+
+Skript počítá i s **minimalizovanou instalací** Ubuntu Serveru (*Ubuntu Server (minimized)*), kde chybí `curl`, `jq`, `ping`, editor a další běžné nástroje. Všechno, co potřebuje on sám nebo návod, nejdřív doinstaluje:
+
+| Skupina | Balíčky | K čemu |
+|---|---|---|
+| základní (vždy) | `ca-certificates`, `curl`, `gnupg`, `jq`, `openssl`, `iproute2`, `tzdata` | GPG klíč Dockeru a jeho ověření, testy API, JSON, generování tajemství, `ss`/`ip`, časová pásma |
+| nástroje pro řešení problémů (vynechá `--no-extras`) | `iputils-ping`, `bind9-dnsutils`, `less`, `nano`, `git` | `ping`, `dig`/`nslookup`, prohlížení logů, úprava souborů, `git clone` repozitáře |
+| Docker | `docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-buildx-plugin`, `docker-compose-plugin` | závislosti (`iptables`, …) doplní `apt` sám |
+
+`ifconfig` ani `netstat` (balíček `net-tools`) neinstalujeme. Jsou zastaralé a návod používá jejich náhrady `ip a` a `ss` z `iproute2`. Ostatní nástroje použité v návodu (`psql`, Python) běží uvnitř kontejnerů, na hostu je není potřeba instalovat.
 
 | Krok skriptu | Odpovídá kapitole | Poznámka |
 |---|---|---|
-| 0/7 kontrola OS, místa na `/var` (min. 15 GB), RAM, portů 3000/4000 | 3 | malé místo = konec s chybou, obsazený port = varování |
-| 1/7 `apt upgrade`, časové pásmo, nástroje | 4.1–4.3 | upgrade lze vynechat přes `--skip-upgrade` |
+| 0/7 kontrola OS, místa na `/var` (min. 17 GB), RAM | 3 | malé místo = konec s chybou |
+| 1/7 `apt upgrade`, balíčky (viz tabulka výše), časové pásmo, porty 3000/4000/443/8443 | 3.3, 4.1–4.3 | upgrade lze vynechat přes `--skip-upgrade`; obsazený port = varování |
 | 2/7 Docker Engine + Compose z `download.docker.com` | 5.1–5.3 | instaluje jen při shodě **fingerprintu GPG klíče** |
 | 3/7 uživatel do skupiny `docker` | 5.4 | projeví se po novém přihlášení |
-| 4/7 `/opt/ai-stack` + `docker-compose.yml`, `config.yaml`, `.env.example` | 6.1, 6.3, 6.4 | odlišný existující soubor nejdřív zazálohuje (`*.bak-<datum>`) |
-| 5/7 `.env` s tajemstvími | 6.1, 6.2, 7.1 | existující hodnoty **nikdy nepřepisuje**; OpenRouter klíč se zeptá skrytě |
-| 6/7 `docker compose config` + `docker compose pull` + `alpine:3.24.3` | 6.5, 7.3, 8.4 | 3 pokusy při výpadku sítě |
+| 4/7 `/opt/ai-stack` + `docker-compose.yml`, `config.yaml`, `Caddyfile`, `.env.example` | 6.1, 6.3, 6.4; část 2: 4.3, 7.2 | odlišný existující soubor nejdřív zazálohuje (`*.bak-<datum>`) |
+| 5/7 `.env`: tajemství, `SERVER_IP`, `WEBUI_URL`, API klíče | 6.1, 6.2, 7.1; část 2: 1, 7.3 | existující hodnoty **nikdy nepřepisuje**; `SERVER_IP` zjistí sám; na klíče se zeptá skrytě |
+| 6/7 `docker compose config`, `docker compose pull` (postgres, litellm, open-webui, caddy) + `alpine:3.24.3`, `caddy validate` | 6.5, 7.3, 8.4; část 2: 7.4 | 3 pokusy při výpadku sítě |
 | 7/7 testovací `docker run`, `docker info` | 5.5 | |
 
 **Co skript záměrně nedělá:**
 - nespouští stack (`docker compose up`);
 - nevytváří virtual key pro Open WebUI, protože k tomu musí běžet LiteLLM (kap. 7.1); v `.env` nechá prázdný řádek `OPENWEBUI_LITELLM_KEY=`;
+- nevytváří interní CA Caddy. Ta vznikne při prvním startu kontejneru `caddy` a root certifikát se exportuje až potom (část 2, kap. 7.5);
 - nepovyšuje už nainstalovaný Docker (viz níže);
 - nerestartuje server, jen upozorní, pokud je restart potřeba.
 
@@ -1404,13 +1415,27 @@ chmod +x prepare.sh
 sudo ./prepare.sh             # nebo: sudo ./prepare.sh --skip-upgrade
 ```
 
-Pokud skript běží v terminálu, zeptá se na API klíč OpenRouteru:
+| Parametr | Význam |
+|---|---|
+| `--skip-upgrade` | bez `apt upgrade` (rychlejší, méně dat) |
+| `--no-extras` | bez nástrojů pro řešení problémů (`ping`, `dig`, `less`, `nano`, `git`) |
+| `--user JMÉNO` | vlastník `/opt/ai-stack`, pokud ho nejde zjistit ze `sudo` |
+| `STACK_DIR=/cesta` (proměnná) | jiný cílový adresář, jen pro testování skriptu: `sudo STACK_DIR=/tmp/test ./prepare.sh` |
+
+Pokud skript běží v terminálu, zeptá se postupně na tři klíče:
 ```
-  Paste the OpenRouter API key (sk-or-v1-…) and press Enter.
+  OpenRouter API key (sk-or-v1-…), then press Enter.
   The key is not displayed. Empty Enter = fill it in later.
   OpenRouter API key:
+  ...
+  Anthropic API key (sk-ant-…), then press Enter.
+  ...
+  PromptGuard API key (pg_…), then press Enter.
 ```
-Klíč se kontroluje stejně jako v kap. 6.1: řídicí znaky (např. ze šipek) znamenají, že se klíč neuloží. Neočekávaný tvar (jiný prefix než `sk-or-v1-` nebo jiná délka než 73 znaků) jen vyvolá varování.
+- **OpenRouter** je potřeba pro část 1. Klíč se kontroluje stejně jako v kap. 6.1: řídicí znaky (např. ze šipek) znamenají, že se klíč neuloží. Neočekávaný tvar (jiný prefix než `sk-or-v1-` nebo jiná délka než 73 znaků) jen vyvolá varování.
+- **Anthropic** a **PromptGuard** jsou volitelné, potřebuje je až část 2. Prázdný Enter je přeskočí. Compose je má jako nepovinné (`${…:-}`), takže stack naběhne i bez nich.
+
+`SERVER_IP` (jde do TLS certifikátu Caddy) a `WEBUI_URL` skript vyplní podle IP adresy rozhraní s výchozí trasou.
 
 **Očekávaný výstup (zkráceno):**
 ```
@@ -1429,6 +1454,8 @@ postgres:16.15  642MB
 ghcr.io/open-webui/open-webui:v0.12.5  6.45GB
 ghcr.io/berriai/litellm:v1.106.6  1.81GB
 alpine:3.24.3  13MB
+caddy:2.11.7  93.1MB
+  [OK] Caddyfile is valid (caddy:2.11.7)
 ...
 Preparation complete. The stack is NOT running yet. Next steps (guide sections 6.5 and 7):
 ```
@@ -1454,7 +1481,9 @@ cd /opt/ai-stack
 OPENWEBUI_LITELLM_KEY=pending docker compose up -d postgres litellm
 ```
 
-Pak vytvořte virtual key podle kap. 7.1. Hodnotu ale **vyplňte do existujícího řádku** `OPENWEBUI_LITELLM_KEY=` (`WEBUI_SECRET_KEY` a `WEBUI_URL` už skript vygeneroval, `printf … >> .env` z kap. 7.1 by vytvořil duplicitní řádky). Nakonec spusťte `docker compose up -d`.
+Pak vytvořte virtual key podle kap. 7.1. Hodnotu ale **vyplňte do existujícího řádku** `OPENWEBUI_LITELLM_KEY=` (`WEBUI_SECRET_KEY` a `WEBUI_URL` už skript vygeneroval, `printf … >> .env` z kap. 7.1 by vytvořil duplicitní řádky). Nakonec spusťte `docker compose up -d`. Tím naběhne i Caddy. Při prvním startu vytvoří interní CA a certifikát pro `SERVER_IP`, další postup (export root certifikátu, důvěra na klientech) je v části 2, kap. 7.5–7.6.
+
+Stejně tak klíče pro část 2 (`ANTHROPIC_API_KEY`, `PROMPTGUARD_API_KEY`) doplňte do existujících prázdných řádků, ne příkazem `echo … >> .env` z části 2, kap. 1.
 
 > Open WebUI při prvním startu ještě stáhne z Hugging Face embedding model (~90 MB, kap. 7.3). Ten se stahuje až do volume běžícího kontejneru, takže ho skript předem nestáhne.
 
@@ -1472,5 +1501,8 @@ Skript je **idempotentní**. Po přerušení (výpadek sítě při stahování) 
 | `Missing …/docker-compose.yml` | `prepare.sh` musí ležet ve stejném adresáři jako soubory z `deploy/`. |
 | `Docker GPG key fingerprint mismatch` | Stažený klíč není klíč Dockeru (proxy, MITM, změna klíče). Neinstalujte, ověřte fingerprint v [oficiální dokumentaci](https://docs.docker.com/engine/install/ubuntu/). |
 | `Attempt 1/3 failed: … compose pull` | Výpadek sítě nebo rate limit registru. Skript to zkusí znovu, případně ho spusťte celý znovu; už stažené vrstvy se nestahují. |
-| `No terminal – set OPENROUTER_API_KEY manually` | Skript běžel bez TTY (např. `ssh server 'sudo ./prepare.sh'`). Klíč doplňte podle kap. 6.1, nebo spusťte `ssh -t`. |
+| `No terminal – OPENROUTER_API_KEY is empty` | Skript běžel bez TTY (např. `ssh server 'sudo ./prepare.sh'`). Klíč doplňte podle kap. 6.1, nebo spusťte `ssh -t`. |
+| `Port 443 is in use` | Na serveru už běží jiný web server (apache2, nginx). Caddy by nenastartoval: `sudo ss -tlnp 'sport = :443'`, cizí službu zastavte nebo přesuňte. |
+| `Caddyfile is not valid` | Chyba v `Caddyfile` (překlep, chybějící závorka). Řádek s chybou je v hlášce, oprava v repu a znovu spustit skript. |
+| `Cannot detect the server IP` | Server nemá výchozí trasu. Doplňte `SERVER_IP` a `WEBUI_URL` v `.env` ručně. |
 

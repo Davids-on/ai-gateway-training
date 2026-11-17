@@ -42,6 +42,10 @@ model_list:
 litellm_settings:
   # Maximum time to wait for the provider's response (s). The default is very high.
   request_timeout: 600
+  # Silently drop request parameters the target model does not support instead
+  # of failing the request. Example: Claude 5.5 models accept only
+  # temperature=1, but Open WebUI users can set any temperature in chat controls.
+  drop_params: true
   # Fallbacks: if a call to the model on the left fails (after retries),
   # LiteLLM transparently retries it on the models on the right, in order.
   # The free OpenRouter tier is often rate-limited -> fall back to Claude Haiku.

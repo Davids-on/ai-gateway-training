@@ -10,14 +10,13 @@
 
 **Obsah:**
 1. [Výchozí stav a prerekvizity](#1-výchozí-stav-a-prerekvizity)
-2. [Modul A: Open WebUI pro uživatele](#2-modul-a-open-webui-pro-uživatele) *(připravuje se)*
-3. [Modul B: Uživatelé, skupiny a přístup k modelům](#3-modul-b-uživatelé-skupiny-a-přístup-k-modelům) *(připravuje se)*
+2. [Modul A: Open WebUI pro uživatele](#2-modul-a-open-webui-pro-uživatele)
+3. [Modul B: Uživatelé, skupiny a přístup k modelům](#3-modul-b-uživatelé-skupiny-a-přístup-k-modelům)
 4. [Modul C: Přidávání modelů v LiteLLM](#4-modul-c-přidávání-modelů-v-litellm)
 5. [Modul D: Klíče, týmy, budgety a rate limity](#5-modul-d-klíče-týmy-budgety-a-rate-limity)
 6. [Modul E: Guardrails](#6-modul-e-guardrails)
 7. [Modul F0: HTTPS pro gateway (Caddy)](#7-modul-f0-https-pro-gateway-caddy)
-8. Modul F: Integrace klientů *(připravuje se)*
-9. Modul G: Observabilita *(připravuje se)*
+8. [Modul F: Integrace klientů](#8-modul-f-integrace-klientů)
 
 Konfigurační soubory jsou v [`deploy/`](../deploy/), příkazy referenčního labu v [`command-log.md`](command-log.md).
 
@@ -90,11 +89,260 @@ Tento seznam zároveň říká, jaká přesná ID modelů použít v konfiguraci
 
 ## 2. Modul A: Open WebUI pro uživatele
 
-*Připravuje se.*
+**Co a proč:** Většina zaměstnanců s gateway pracuje přes Open WebUI, ne přes API. V tomto modulu ukážeme, co jim Open WebUI nabízí nad rámec „chatu s modelem“: vlastní asistenty s pevně daným chováním, knihovnu promptů a porovnání modelů. Všechno běží přes LiteLLM, takže limity, guardraily i spend tracking z modulů C až E platí i tady.
+
+Open WebUI otevřete na `https://<IP_SERVERU>` (HTTPS přes Caddy, modul F0) a přihlaste se jako admin. Postup je stejný i přes `http://<IP_SERVERU>:3000`.
+
+> **Předpoklad:** Modely z LiteLLM musí být pro uživatele viditelné (modul B, kap. 3.2). Admin vidí všechny modely vždy, takže modul A můžete projít i před modulem B.
+
+> **Poznámka k verzi:** Lab běží na Open WebUI v0.12.5. Rozhraní se mezi verzemi mění (názvy tlačítek, umístění menu). Popis níže odpovídá v0.12.5.
+
+### 2.1 Chat a jeho parametry
+
+- **Výběr modelu:** rozbalovací seznam u vstupního pole. Modely mají popis z *Admin Panel → Settings → Models* (kap. 3.2).
+- **Ovládání chatu** (ikona ⚙ vpravo nahoře, *Chat Controls*): systémový prompt a parametry jen pro tento chat (temperature, max tokens, top_p…).
+- **Historie, složky, sdílení, export:** levý panel. Export do JSON, PDF nebo TXT je v menu `…` u chatu.
+- **Dočasný chat** (*Temporary Chat*) se neukládá do historie.
+
+> **Claude 5.5 a `temperature`:** Modely Claude 5.5 přijímají jen `temperature=1`. Když uživatel v *Chat Controls* nastaví jinou hodnotu, Anthropic request odmítne:
+> ```
+> litellm.UnsupportedParamsError: claude-haiku-5-5 does not support temperature=0.3. Only temperature=1 is supported.
+> To drop unsupported params, set `litellm.drop_params = True`.
+> ```
+> Proto jsme v LiteLLM zapnuli `drop_params: true` (v `litellm_settings` v [`deploy/config.yaml`](../deploy/config.yaml)). LiteLLM pak nepodporované parametry tiše zahodí a request projde:
+> ```yaml
+> litellm_settings:
+>   request_timeout: 600
+>   drop_params: true
+> ```
+> Ověření (po `docker compose restart litellm`):
+> ```bash
+> curl -s http://localhost:4000/v1/chat/completions -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+>   -H "Content-Type: application/json" \
+>   -d '{"model":"claude-haiku-5-5","temperature":0.3,"max_tokens":300,"messages":[{"role":"user","content":"Řekni OK."}]}' \
+>   | jq -c '{content: .choices[0].message.content, err: .error.message}'
+> ```
+> ```
+> {"content":"OK.","err":null}
+> ```
+> Nevýhoda: uživatel nedostane zpětnou vazbu, že jeho nastavení nemá efekt.
+
+### 2.2 Vlastní asistent (Workspace → Models)
+
+**Co a proč:** *Model* ve Workspace je „obal“ nad modelem z LiteLLM: má vlastní jméno, popis, systémový prompt, parametry a přístupová práva. Uživatel si vybere „IT helpdesk CZ“ a nemusí řešit, co napsat do systémového promptu. Na gateway jde pořád request na `claude-haiku-5-5`.
+
+**Postup:** *Workspace → Models → New Model*:
+
+| Pole | Hodnota |
+|---|---|
+| Model Name | `IT helpdesk CZ` (ID se vyplní samo: `it-helpdesk-cz`) |
+| Description | `Asistent pro běžné IT dotazy zaměstnanců (Windows, M365, VPN, tiskárny)` |
+| Base Model (From) | `claude-haiku-5-5` |
+| System Prompt | viz níže |
+| Advanced Params | nechat *Default* (temperature viz poznámka v kap. 2.1) |
+| Access (vpravo nahoře) | *Public*: vidí ho všichni uživatelé |
+
+Systémový prompt:
+```
+Jsi IT helpdesk společnosti Example. Odpovídej česky, stručně a v očíslovaných krocích.
+Pomáháš s Windows 11, Microsoft 365 (Outlook, Teams, OneDrive), VPN a tiskárnami.
+Nikdy nechtej po uživateli heslo ani kód z MFA. Pokud problém nejde vyřešit do 3 kroků
+nebo jde o hardware, doporuč založit tiket na helpdesk@example.com.
+Dnešní datum: {{CURRENT_DATE}}. Uživatel: {{USER_NAME}}.
+```
+`{{CURRENT_DATE}}` a `{{USER_NAME}}` jsou proměnné, které Open WebUI před odesláním nahradí aktuálním datem a jménem přihlášeného uživatele.
+
+Uložit tlačítkem **Save & Create**.
+
+**Ověření:** Nový chat → model *IT helpdesk CZ* → dotaz:
+```
+Outlook mi nesynchronizuje poštu, co mám dělat? Můžu ti poslat heslo, ať to zkontroluješ?
+```
+Očekávaná odpověď (text se bude lišit):
+```
+Heslo mi prosím neposílejte. Ani já, ani helpdesk ho nikdy nepotřebujeme ...
+Zkuste tyto kroky:
+1. Zkontrolujte připojení a stav služby. ...
+2. Vynuťte synchronizaci a opravte účet. ...
+3. Odhlaste a znovu přihlaste účet. ...
+Pokud problém přetrvá ani po těchto krocích, založte tiket na helpdesk@example.com. ...
+```
+Asistent dodržel všechna pravidla ze systémového promptu: odmítl heslo, odpověděl ve třech krocích a odkázal na tiket.
+
+### 2.3 Knihovna promptů (Workspace → Prompts)
+
+**Co a proč:** Opakované úlohy (shrnutí schůzky, překlad, kontrola textu) si uložíte jako šablonu s příkazem. V chatu ji pak vyvoláte napsáním `/` a názvu příkazu. Šablona může obsahovat **proměnné** `{{nazev}}`, na které se Open WebUI před odesláním zeptá formulářem.
+
+**Postup:** *Workspace → Prompts → Create*:
+
+| Pole | Hodnota |
+|---|---|
+| Prompt Name | `Shrnutí schůzky` |
+| Command | `/shrnuti-schuzky` (vyplní se samo z názvu) |
+| Access | *Public* |
+
+Obsah:
+```
+Z následujícího zápisu ze schůzky připrav česky:
+1. shrnutí v maximálně 3 větách,
+2. seznam rozhodnutí,
+3. tabulku úkolů (úkol | kdo | termín).
+
+Název schůzky: {{nazev}}
+
+Zápis:
+{{zapis}}
+```
+
+**Ověření:** V novém chatu napište `/shrnuti`. Nabídne se `shrnuti-schuzky`, potvrďte ho Enterem. Otevře se formulář **Input Variables** s poli `nazev` a `zapis`. Vyplňte například:
+- nazev: `Plánování školení AI gateway`
+- zapis: `Jana navrhla školení ve dvou částech. Petr souhlasí, druhá část bude 10. prosince. Lab připraví Jana do 5. prosince. Petr rozešle pozvánky do pátku. Rozhodli jsme, že Cursor vynecháme.`
+
+Po odeslání model vrátí shrnutí, seznam rozhodnutí a tabulku úkolů:
+```
+Úkoly
+ÚKOL                          KDO     TERMÍN
+Připravit lab                 Jana    do 5. prosince
+Rozeslat pozvánky na školení  Petr    do pátku
+```
+
+### 2.4 Porovnání modelů vedle sebe
+
+V nabídce modelů klikněte na **+** a přidejte druhý model, nebo otevřete rovnou URL `https://<IP_SERVERU>/?models=claude-haiku-5-5,nemotron-3-ultra`. Jeden dotaz se pošle oběma modelům a odpovědi se zobrazí vedle sebe (na úzké obrazovce pod sebou):
+
+```
+Vysvětli jednou větou, co je AI gateway.
+```
+```
+claude-haiku-5-5:  AI gateway je střední vrstva (proxy/rozhraní) mezi aplikacemi a jazykovými modely,
+                   která centralizuje přístup k více AI poskytovatelům a řeší jejich směrování, ...
+nemotron-3-ultra:  AI gateway je vrstva infrastruktury, která propojuje aplikace s různými modely
+                   umělé inteligence, spravuje jejich volání, bezpečnost, monitorování a optimalizaci nákladů.
+```
+Hodí se pro výběr modelu na konkrétní úlohu (kvalita vs. cena vs. rychlost). V LiteLLM se request započítá **každému modelu zvlášť**.
+
+### Troubleshooting
+
+| Příznak | Příčina | Řešení |
+|---|---|---|
+| `UnsupportedParamsError … does not support temperature` | Claude 5.5 přijímá jen `temperature=1` | `drop_params: true` v LiteLLM, nebo parametr nenastavovat |
+| uživatel nevidí asistenta | asistent má *Access: Private* | *Workspace → Models → (asistent) → Access → Public* nebo skupina |
+| asistent je vidět, ale chat skončí chybou o modelu | uživatel nemá přístup k **základnímu** modelu, nebo ho nemá virtual key `open-webui` | viditelnost základního modelu (kap. 3.2), `/key/update` (kap. 4.8) |
+| `/příkaz` nic nenabízí | prompt je *Private* nebo jiný příkaz | zkontrolovat *Workspace → Prompts* |
+| proměnné se nenahradí | překlep v `{{…}}` | názvy proměnných bez mezer a diakritiky |
+| prázdná odpověď | model spotřeboval `max_tokens` na thinking | v *Advanced Params* nenastavovat `max_tokens` příliš nízko |
 
 ## 3. Modul B: Uživatelé, skupiny a přístup k modelům
 
-*Připravuje se.*
+**Co a proč:** Ne každý má mít přístup ke všemu. Dražší modely chceme jen pro pilotní skupinu a některé jen pro adminy. Open WebUI řídí přístup ve třech vrstvách:
+
+1. **Role** (`admin`, `user`, `pending`): základní oprávnění v celé aplikaci.
+2. **Skupiny:** přidávají práva navíc (např. tvorba asistentů ve Workspace) a slouží jako adresát přístupu k modelům, asistentům a promptům.
+3. **Access u každého modelu, asistenta a promptu:** *Private* (jen vlastník/admin a vyjmenované skupiny či uživatelé) nebo *Public* (všichni).
+
+A nad tím vším stojí **virtual key** `open-webui` v LiteLLM (kap. 4.8). Model, který klíč nemá povolený, Open WebUI nevidí vůbec.
+
+### 3.1 Role a registrace
+
+- První registrovaný účet je **admin** (část 1, kap. 7.5).
+- Další uživatelé se registrují s rolí **pending** (`DEFAULT_USER_ROLE: pending` v compose) a čekají, až je admin schválí v *Admin Panel → Users* (změna role na `user`).
+- Admin může účet založit i sám: *Admin Panel → Users → +* (jméno, e-mail, heslo, role).
+- Ve firmě se uživatelé typicky zakládají automaticky přes SSO/LDAP (část 3).
+
+### 3.2 Viditelnost modelů
+
+Nové modely z LiteLLM jsou v Open WebUI ve výchozím stavu **Private**, tedy viditelné jen pro adminy. V labu nastavíme:
+
+| Model | Access | Kdo ho vidí | Proč |
+|---|---|---|---|
+| `nemotron-3-ultra` | Public | všichni | zdarma |
+| `claude-haiku-5-5` | Public | všichni | levný, pro běžné dotazy |
+| `claude-sonnet-5-5` | Private + skupina **Pilot** (read) | jen pilotní skupina | dražší |
+| `claude-opus-5-5` | Private | jen admini | nejdražší |
+
+**Postup:** *Admin Panel → Settings → Models* → ikona tužky u modelu:
+- **Description:** popis, který uživatel uvidí ve výběru modelu (např. „Rychlý a levný model pro běžné dotazy (Anthropic)“). Uložit tlačítkem **Save & Update**.
+- **Access** (vpravo nahoře): *Private* → *Public*, nebo zůstat *Private* a přes **Add Access** přidat skupinu. Změna přístupu se ukládá **hned** (hláška *Saved*), bez Save & Update.
+
+V seznamu modelů je pak u každého štítek *Public* / *Private*.
+
+### 3.3 Skupina Pilot
+
+*Admin Panel → Users → Groups → New Group*:
+
+| Záložka | Pole | Hodnota |
+|---|---|---|
+| General | Name | `Pilot` |
+| General | Description | `Pilotní uživatelé – přístup k Claude Sonnet 5.5` |
+| Permissions | Workspace Permissions → **Models Access** | zapnout (může tvořit vlastní asistenty) |
+| Permissions | Workspace Permissions → **Prompts Access** | zapnout (může tvořit vlastní prompty) |
+
+Ostatní oprávnění nechte výchozí. Skupinová práva se **přičítají** k výchozím právům role `user` (*Groups → Default permissions*), nikdy je neubírají.
+
+> Po zapnutí *Models Access* se pod ním rozbalí podvolby (*Import / Export / Hidden Models*) a ostatní přepínače se posunou. Klikejte pozorně.
+
+Do skupiny pak přidáte uživatele: *Groups → Pilot → Users*.
+
+**Ověření nastavení** (konzole prohlížeče na stránce Open WebUI, přihlášený admin):
+```js
+const r = await fetch('/api/v1/models/base', {headers:{Authorization:'Bearer '+localStorage.token}});
+(await r.json()).map(m => ({id: m.id, grants: (m.access_grants||[]).map(g => g.principal_type+':'+g.principal_id+':'+g.permission)}))
+```
+```
+[ { id: "claude-haiku-5-5",  grants: ["user:*:read"] },
+  { id: "nemotron-3-ultra",  grants: ["user:*:read"] },
+  { id: "claude-sonnet-5-5", grants: ["group:fdeb36d1-…:read"] } ]
+```
+`user:*` znamená *Public*. `claude-opus-5-5` v seznamu není, protože nemá žádné nastavení, a zůstává tedy *Private* (jen admin).
+
+### 3.4 Ověření z pohledu uživatelů
+
+Admin vidí vždy všechno, proto přístup ověřujeme **testovacími účty**:
+
+| Účet | Role | Skupina |
+|---|---|---|
+| `user.test@lab.example.com` | user | žádná |
+| `pilot.test@lab.example.com` | user | Pilot |
+
+Účty založte v *Admin Panel → Users → +*. Do skupiny přidáte uživatele v *Groups → Pilot → (Edit) → Users* zaškrtnutím u jména. Změna se ukládá **okamžitě** (u skupiny se objeví „1 direct members“).
+
+Přihlaste se postupně jako každý z nich (jiné okno prohlížeče v anonymním režimu) a zkontrolujte nabídku modelů. Totéž přesně ukáže API Open WebUI z konzole prohlížeče přihlášeného uživatele:
+```js
+const h = {headers: {Authorization: 'Bearer ' + localStorage.token}};
+const models = (await (await fetch('/api/models', h)).json()).data.map(m => m.id);
+const perms  = (await (await fetch('/api/v1/users/permissions', h)).json()).workspace;
+const chat = async (model) => (await fetch('/api/chat/completions', {method: 'POST',
+  headers: {...h.headers, 'Content-Type': 'application/json'},
+  body: JSON.stringify({model, stream: false, messages: [{role: 'user', content: 'Řekni jen: OK.'}]})})).status;
+({models, ws_models: perms.models, ws_prompts: perms.prompts,
+  sonnet: await chat('claude-sonnet-5-5'), opus: await chat('claude-opus-5-5')})
+```
+
+Výsledky v referenčním labu:
+
+| | `user.test` | `pilot.test` (bez skupiny) | `pilot.test` (ve skupině Pilot) |
+|---|---|---|---|
+| Modely v nabídce | nemotron-3-ultra, claude-haiku-5-5, it-helpdesk-cz | totéž | nemotron-3-ultra, **claude-sonnet-5-5**, claude-haiku-5-5, it-helpdesk-cz |
+| Chat přes Sonnet | `400 Model not found` | `400 Model not found` | `200` („OK.“) |
+| Chat přes Opus | `400 Model not found` | `400 Model not found` | `400 Model not found` |
+| Workspace → Models / Prompts | ne / ne | ne / ne | **ano / ano** |
+| Prompt `/shrnuti-schuzky`, asistent IT helpdesk CZ | ano (Public) | ano | ano |
+
+Důležité body:
+- Skrytý model **není jen schovaný v nabídce**. Request na něj přes API Open WebUI skončí `Model not found`, takže přístup hlídá server.
+- Prostřední sloupec ukazuje typickou chybu: účet založený, ale **nepřidaný do skupiny**. Uživatel pak nevidí nic navíc a aplikace nehlásí žádnou chybu.
+- Členství ve skupině platí **ihned**, uživatel se nemusí znovu přihlašovat.
+
+### Troubleshooting
+
+| Příznak | Příčina | Řešení |
+|---|---|---|
+| uživatel nevidí model, který by měl | není ve skupině (*Groups → Pilot* ukazuje „0 direct members“) | přidat v záložce *Users* skupiny |
+| uživatel nevidí žádný model | modely jsou *Private* a nemá skupinu, nebo je v roli `pending` | viditelnost (kap. 3.2), schválit roli |
+| model v Open WebUI chybí i adminovi | model není povolený virtual key `open-webui` v LiteLLM | `/key/update` (kap. 4.8) |
+| uživatel nemá v menu *Workspace* | skupina nemá *Models Access* / *Prompts Access* | *Groups → Pilot → Permissions* |
+| asistent je vidět, ale chat hlásí chybu modelu | uživatel nemá přístup k **základnímu** modelu asistenta | zpřístupnit základní model, nebo asistenta postavit nad veřejným modelem |
+
 
 ---
 
@@ -753,7 +1001,66 @@ EOF
 ```
 V Admin UI: *Logs* → detail requestu → *Guardrails*. Události PromptGuardu jsou navíc v jeho dashboardu (free tier je uchovává 24 h).
 
-### 6.6 Realistická očekávání
+### 6.6 Druhá vrstva: Filter function v Open WebUI
+
+**Co a proč:** Open WebUI umí vlastní filtry v Pythonu (*Functions → Filter*). `inlet()` vidí zprávu uživatele **předtím**, než odejde do LiteLLM, a `outlet()` vidí odpověď modelu, než se zobrazí. Hodí se na věci, které patří k uživatelskému rozhraní:
+- upozornění „odpověď vygenerovala AI“,
+- srozumitelná česká hláška místo technické chyby z gateway,
+- pravidla podle identity uživatele (filtr dostane jméno, e-mail a roli).
+
+| | Guardrail v LiteLLM | Filter v Open WebUI |
+|---|---|---|
+| Chrání | všechny klienty (UI, Claude Code, Codex, skripty) | jen uživatele Open WebUI |
+| Jazyk / konfigurace | YAML (regex, slova) nebo externí služba | libovolný Python |
+| Vidí identitu uživatele | jen klíč (`open-webui`) | ano (`__user__`: jméno, e-mail, role) |
+| Kdo spravuje | správce gateway | admin Open WebUI |
+
+Hlavní ochrana proto patří na gateway. Filtr v Open WebUI je doplněk (a jak ukáže ověření níže, ne zcela těsný).
+
+**Postup:**
+1. Kód filtru je v repozitáři: [`deploy/openwebui/gateway_notice_filter.py`](../deploy/openwebui/gateway_notice_filter.py). `inlet()` odmítne zprávu s rodným číslem, `outlet()` připojí k odpovědi upozornění. Texty a regex jsou ve *Valves* (nastavitelné z UI bez úpravy kódu).
+2. *Admin Panel → Functions → New Function*: obsah editoru nahraďte obsahem souboru. *Function Name* a *ID* se vyplní z hlavičky (`title:`), *Description* doplňte. Uložit, potvrdit varování o spouštění kódu.
+3. V seznamu funkcí filtr **zapnout** (přepínač) a v menu `…` zapnout **Global**. Bez *Global* by se filtr musel přiřadit každému modelu zvlášť (*Workspace → Models → Filters*).
+
+Stav ověříte přes API Open WebUI (z konzole prohlížeče na stránce Open WebUI, kde je přihlášený admin):
+```js
+await (await fetch('/api/v1/functions/', {headers:{Authorization:'Bearer '+localStorage.token}})).json()
+// [{ id: "gateway_notice_filter", type: "filter", is_active: true, is_global: true, ... }]
+```
+
+**Ověření:**
+- Dotaz `Jaké je hlavní město Polska? Odpověz jedním slovem.` vrátí odpověď s upozorněním:
+  ```
+  Varšava
+
+  Odpověď vygenerovala AI. Před použitím ji ověřte.
+  ```
+- Dotaz `Ověř prosím formát rodného čísla 850615/1234.` skončí hláškou filtru a do LiteLLM vůbec neodejde:
+  ```
+  Zpráva obsahuje rodné číslo. Osobní údaje do AI neposílejte – odstraňte je a zkuste to znovu.
+  ```
+  V logu Open WebUI (`docker compose logs open-webui`):
+  ```
+  ERROR | open_webui.main:process_chat - Error processing chat payload: Zpráva obsahuje rodné číslo. ...
+  ```
+
+> ⚠️ **Filtr nechrání vedlejší úlohy Open WebUI.** Chat se zablokovanou zprávou přesto dostal automaticky vygenerovaný název *„Ověření formátu rodného čísla“* a ve spend logu LiteLLM je ve stejné vteřině úspěšný request z klíče `open-webui`:
+> ```
+>     t     | status  |   model_group    | key
+> ----------+---------+------------------+-----------
+>  11:24:27 | success | claude-haiku-5-5 | open-webui
+> ```
+> Open WebUI kromě samotného chatu posílá modelu i **úlohy na pozadí**: generování názvu chatu, tagů a návrhů dalších otázek (*follow-ups*). Ty filtrem `inlet()` neprocházejí, takže citlivý text odešel do LiteLLM a dál k poskytovateli. (LiteLLM ve výchozím stavu obsah promptů do spend logu neukládá, proto se to v logu nedá dohledat podle textu.)
+>
+> Z toho plynou dvě věci:
+> - Ochranu osobních údajů **nestavte jen na filtru v UI**. Guardraily na gateway (`secrets-block`, `pii-mask`, PromptGuard) se uplatní na **každý** request včetně úloh na pozadí.
+> - Pokud vadí, že se z obsahu chatu generují názvy a tagy, vypněte to v *Admin Panel → Settings → Interface*, sekce *Generation*: *Title Generation*, *Follow Up Generation*, *Tags Generation*. Pozor i na *Autocomplete Generation*: když je zapnutá, posílá modelu rozepsaný text **ještě před odesláním zprávy**.
+
+> **Pozor na formát zpráv v Open WebUI 0.12:** Odpověď asistenta je uložená dvakrát: jako text v `content` a strukturovaně v `output` (položky ve stylu OpenAI Responses API). Rozhraní zobrazuje `output`. Filtr, který upraví jen `content`, se do databáze uloží, ale uživatel změnu neuvidí. Proto `outlet()` v našem filtru upravuje obojí. Starší návody a filtry z komunity často počítají jen s `content`.
+
+> ⚠️ Funkce v Open WebUI spouštějí libovolný Python kód **uvnitř kontejneru Open WebUI** (přístup k jeho datům i síti). Instalujte jen kód, který jste přečetli, a verzujte ho v gitu jako ostatní konfiguraci.
+
+### 6.7 Realistická očekávání
 
 - Regex filtr **nerozumí kontextu**. Číslo karty rozdělené do dvou zpráv, zakódované v base64 nebo napsané slovy projde. Je to pojistka proti omylu, ne proti cílenému úniku.
 - Detekce prompt injection je **pravděpodobnostní**. Bude mít falešné poplachy i propustí některé útoky. Nastavte ji, sledujte dashboard a laďte.
@@ -1044,3 +1351,314 @@ Až budou všichni klienti přepnutí na HTTPS:
 | streamované odpovědi přijdou najednou na konci | bufferování v proxy | `flush_interval -1`; zkontrolovat, že před Caddy není další proxy |
 | `502 Bad Gateway` | backend neběží nebo není `healthy` | `docker compose ps`, `docker compose logs litellm` |
 | po smazání volume `caddy-data` klienti hlásí nedůvěryhodný certifikát | vznikla nová CA | znovu exportovat a importovat root, proto `caddy-data` zálohovat |
+
+---
+
+## 8. Modul F: Integrace klientů
+
+**Co a proč:** Gateway je užitečná teprve tehdy, když přes ni chodí všichni klienti. Každý dostane **vlastní virtual key**, takže útrata, limity i logy jsou vidět po lidech a aplikacích a klíč jde kdykoli zrušit bez dopadu na ostatní.
+
+| Klient | API, které používá | Endpoint na gateway | Hlavička s klíčem |
+|---|---|---|---|
+| curl, skripty, OpenAI SDK | OpenAI Chat Completions | `/v1/chat/completions` | `Authorization: Bearer` |
+| Anthropic SDK | Anthropic Messages | `/v1/messages` | `x-api-key` nebo `Bearer` |
+| **Claude Code** | Anthropic Messages | `/v1/messages`, `/v1/messages/count_tokens`, `/v1/models` | `Bearer` (`ANTHROPIC_AUTH_TOKEN`) nebo `x-api-key` (`ANTHROPIC_API_KEY`) |
+| **Claude Desktop** | Anthropic Messages | `/v1/messages`, `/v1/models` | `Bearer` (výchozí) nebo `x-api-key` |
+| **Codex CLI** | OpenAI Responses | `/v1/responses`, `/v1/models` | `Authorization: Bearer` |
+
+LiteLLM všechna tato API překládá na API poskytovatele. Codex (klient od OpenAI) tak může pracovat s Claude modely.
+
+**Base URL v labu:** `https://192.0.2.10:8443`. Některé klienty chtějí URL **s** `/v1` (OpenAI SDK, Codex), jiné **bez** (Claude Code, Claude Desktop, Anthropic SDK, protože si `/v1/messages` přidávají samy). To je nejčastější chyba při konfiguraci.
+
+**Předpoklad:** Klient důvěřuje root CA Caddy (kap. 7.5).
+
+> **Co bylo v referenčním labu ověřeno:** Na straně gateway jsme ověřili všechny typy requestů, které klienti posílají (kap. 8.2–8.4): přes HTTPS, s virtual key, z admin stanice (macOS). Samotné aplikace Claude Code a Codex CLI v labu nainstalované nebyly, jejich konfigurace je převzatá z oficiální dokumentace (odkazy u každé sekce). Před školením ji projděte na čisté stanici.
+
+### 8.1 Virtual key pro uživatele
+
+Klíč pro konkrétního člověka a zařízení, v týmu `vyvojari` (modul D):
+```bash
+cd /opt/ai-stack
+set -a; . ./.env; set +a
+T=$(curl -s http://localhost:4000/team/list -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+     | jq -r '.[] | select(.team_alias=="vyvojari") | .team_id')
+curl -s http://localhost:4000/key/generate -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+  -H "Content-Type: application/json" \
+  -d "{\"key_alias\":\"jan.novak-mac\",\"user_id\":\"jan.novak\",\"team_id\":\"$T\"}" | jq -r .key
+```
+Klíč (`sk-…`) se zobrazí jen jednou. Uživatel si ho uloží do správce hesel, ne do souboru v repozitáři.
+
+> **Jeden klíč na klienta, nebo na člověka?** Pro přehled útraty je lepší klíč na každý klient (`jan.novak-claude-code`, `jan.novak-codex`), protože spend log pak ukáže, kolik stojí který nástroj. Útrata se navíc sčítá na uživatele i tým (kap. 5.4).
+
+Na stanici si pro testy načtěte proměnné (`read -s` klíč nevypíše na obrazovku ani neuloží do historie):
+```bash
+export GW=https://192.0.2.10:8443
+read -rsp "Virtual key: " VK; echo
+```
+
+### 8.2 API obecně: OpenAI a Anthropic formát
+
+**Seznam modelů**, který vrací jen modely povolené pro klíč (tým `vyvojari` má Sonnet a Haiku):
+```bash
+curl -s $GW/v1/models -H "Authorization: Bearer $VK" | jq -c '[.data[].id]'
+```
+```
+["claude-haiku-5-5","claude-sonnet-5-5"]
+```
+
+**OpenAI formát** (`/v1/chat/completions`):
+```bash
+curl -s $GW/v1/chat/completions -H "Authorization: Bearer $VK" -H "Content-Type: application/json" \
+  -d '{"model":"claude-haiku-5-5","max_tokens":300,"messages":[{"role":"user","content":"Jedním slovem: barva oblohy?"}]}' \
+  | jq -c '{model, content: .choices[0].message.content}'
+```
+```
+{"model":"claude-haiku-5-5","content":"Modrá"}
+```
+
+**Anthropic formát** (`/v1/messages`), LiteLLM přijme klíč v `x-api-key` i v `Authorization: Bearer`:
+```bash
+curl -s $GW/v1/messages -H "x-api-key: $VK" -H "anthropic-version: 2023-06-01" -H "Content-Type: application/json" \
+  -d '{"model":"claude-sonnet-5-5","max_tokens":300,"messages":[{"role":"user","content":"Jedním slovem: barva trávy?"}]}' \
+  | jq -c '{model, text: .content[-1].text}'
+```
+```
+{"model":"claude-sonnet-5-5","text":"Zelená."}
+```
+`.content[-1]` místo `.content[0]`: u modelů s *thinking* může být první blok typu `thinking` a text až za ním.
+
+**Model mimo povolené:**
+```
+{"type":"team_model_access_denied","message":"The requested model 'claude-opus-5-5' is not available for this API key, ..."}
+```
+
+**V kódu (SDK):** Stačí změnit base URL a klíč, zbytek kódu zůstává stejný:
+```python
+# OpenAI SDK – base_url S /v1
+from openai import OpenAI
+client = OpenAI(base_url="https://192.0.2.10:8443/v1", api_key=os.environ["VK"])
+r = client.chat.completions.create(model="claude-haiku-5-5",
+        messages=[{"role": "user", "content": "Ahoj"}], max_tokens=300)
+
+# Anthropic SDK – base_url BEZ /v1
+import anthropic
+client = anthropic.Anthropic(base_url="https://192.0.2.10:8443", api_key=os.environ["VK"])
+r = client.messages.create(model="claude-sonnet-5-5", max_tokens=300,
+        messages=[{"role": "user", "content": "Ahoj"}])
+```
+Python knihovny nepoužívají systémové úložiště certifikátů macOS/Windows. Interní CA jim předejte přes `SSL_CERT_FILE=/cesta/caddy-root.crt`.
+
+### 8.3 Claude Code
+
+**Jak to funguje:** Claude Code mluví Anthropic Messages API. Místo `api.anthropic.com` ho nasměrujeme proměnnou `ANTHROPIC_BASE_URL` na gateway a místo přihlášení přes claude.ai mu dáme virtual key. Dokumentace: [Connect Claude Code to an LLM gateway](https://code.claude.com/docs/en/llm-gateway-connect), [Gateway compatibility guide](https://code.claude.com/docs/en/llm-gateway-protocol).
+
+**Co gateway musí umět, ověřeno v labu:**
+
+a) **Tool use**, na kterém stojí celý agent (čtení souborů, shell, editace):
+```bash
+curl -s $GW/v1/messages -H "x-api-key: $VK" -H "anthropic-version: 2023-06-01" -H "Content-Type: application/json" -d '{
+  "model":"claude-sonnet-5-5","max_tokens":1000,
+  "tools":[{"name":"read_file","description":"Read a file from the project",
+            "input_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}],
+  "messages":[{"role":"user","content":"Přečti soubor README.md pomocí nástroje."}]}' \
+  | jq -c '{stop_reason, tool: [.content[] | select(.type=="tool_use") | {name, input}]}'
+```
+```
+{"stop_reason":"tool_use","tool":[{"name":"read_file","input":{"path":"README.md"}}]}
+```
+
+b) **Prompt caching**: Claude Code posílá v každém kroku celý kontext (system prompt, definice nástrojů, historii) s `cache_control`. Gateway, která tyto značky zahodí, zdražuje provoz několikanásobně. Test: dvakrát stejný dlouhý system prompt:
+```bash
+SYS=$(python3 -c "print(' '.join(f'Pravidlo {i}: odpovídej stručně, česky a věcně.' for i in range(400)))")
+for i in 1 2; do
+  jq -n --arg s "$SYS" '{model:"claude-haiku-5-5",max_tokens:300,
+        system:[{type:"text",text:$s,cache_control:{type:"ephemeral"}}],
+        messages:[{role:"user",content:"Řekni OK."}]}' \
+  | curl -s $GW/v1/messages -H "x-api-key: $VK" -H "anthropic-version: 2023-06-01" \
+      -H "Content-Type: application/json" -d @- \
+  | jq -c '.usage | {input_tokens, cache_creation_input_tokens, cache_read_input_tokens}'
+done
+```
+```
+{"input_tokens":13,"cache_creation_input_tokens":16803,"cache_read_input_tokens":0}
+{"input_tokens":13,"cache_creation_input_tokens":0,"cache_read_input_tokens":16803}
+```
+Druhý request načetl celý prompt z cache. Cache read stojí zlomek ceny běžného vstupu.
+
+c) **Počítání tokenů** (`/v1/messages/count_tokens`), podle kterého Claude Code hlídá zaplnění kontextu:
+```bash
+curl -s $GW/v1/messages/count_tokens -H "x-api-key: $VK" -H "anthropic-version: 2023-06-01" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"claude-sonnet-5-5","messages":[{"role":"user","content":"Kolik tokenů má tahle věta?"}]}' | jq -c .
+```
+```
+{"input_tokens":23,"litellm_count_source":"provider"}
+```
+
+d) **Beta hlavičky** (např. `anthropic-beta: context-1m-2025-08-07` pro 1M kontext) gateway propustí. Request s hlavičkou skončil normální odpovědí.
+
+e) **Streaming** přes Caddy viz kap. 7.6 c). Guardraily platí i pro `/v1/messages` (kap. 6.4 f).
+
+**Konfigurace na stanici:**
+
+Nejdřív v shellu a ověřit, teprve pak natrvalo:
+```bash
+export ANTHROPIC_BASE_URL=https://192.0.2.10:8443        # BEZ /v1
+export ANTHROPIC_AUTH_TOKEN=<VIRTUAL_KEY>               # posílá se jako Authorization: Bearer
+export NODE_EXTRA_CA_CERTS=$HOME/caddy-root.crt         # Node.js nepoužívá systémové úložiště
+# modely, které gateway a tým povolují (jinak Claude Code může chtít model, který klíč nemá):
+export ANTHROPIC_DEFAULT_OPUS_MODEL=claude-sonnet-5-5   # tým "vyvojari" Opus nemá
+export ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-5-5
+export ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-haiku-5-5   # i pro pomocné úlohy (názvy session apod.)
+claude
+```
+V Claude Code spusťte `/status`. Řádek **Anthropic base URL** musí ukazovat gateway a řádek **Auth token** proměnnou `ANTHROPIC_AUTH_TOKEN`. Pak pošlete libovolný prompt.
+
+Natrvalo do `~/.claude/settings.json` (platí pro všechny projekty a i pro agenty běžící na pozadí):
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://192.0.2.10:8443",
+    "ANTHROPIC_AUTH_TOKEN": "<VIRTUAL_KEY>",
+    "NODE_EXTRA_CA_CERTS": "/Users/<uživatel>/caddy-root.crt",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-sonnet-5-5",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5-5",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-5-5"
+  }
+}
+```
+> ⚠️ Klíč nikdy nedávejte do projektového `.claude/settings.json`, ten se commituje do gitu. Pro jeden projekt použijte `.claude/settings.local.json` (a ověřte, že je v `.gitignore`).
+
+**Pro firmu (plošně):**
+- **Managed settings:** soubor `managed-settings.json` se stejným blokem `env`, který uživatel nemůže přepsat. Na macOS v `/Library/Application Support/ClaudeCode/`, na Windows v `C:\Program Files\ClaudeCode\`, na Linuxu v `/etc/claude-code/`. Distribuuje se přes MDM nebo GPO. Viz [Roll out an LLM gateway](https://code.claude.com/docs/en/llm-gateway-rollout).
+- **`apiKeyHelper`:** místo statického klíče příkaz, který klíč vypíše (z trezoru, po SSO). Claude Code ho posílá v `Authorization` i `x-api-key`.
+- **`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`:** vypne telemetrii, kontrolu verzí a automatické aktualizace mimo gateway. Hodí se, když síť pouští ven jen gateway.
+- **`CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`:** Claude Code si načte modely z `/v1/models` gateway a nabídne je v `/model`.
+
+**Co přes gateway nefunguje:** Remote Control a hlasové diktování (potřebují přihlášení přes claude.ai), cloudové sessions a Claude v Slacku (běží mimo gateway).
+
+### 8.4 Codex CLI
+
+**Jak to funguje:** Codex (OpenAI) mluví OpenAI **Responses API** (`/v1/responses`). LiteLLM ho přeloží na Anthropic Messages, takže Codex může používat Claude modely. Dokumentace: [LiteLLM – Codex CLI](https://docs.litellm.ai/docs/proxy/client_setup/codex_cli).
+
+**Co gateway musí umět, ověřeno v labu:**
+
+a) Odpověď přes Responses API s Claude modelem:
+```bash
+curl -s $GW/v1/responses -H "Authorization: Bearer $VK" -H "Content-Type: application/json" \
+  -d '{"model":"claude-sonnet-5-5","input":"Jedním slovem: hlavní město Slovenska?","max_output_tokens":300}' \
+  | jq -c '{object, model, status, text: [.output[] | select(.type=="message") | .content[].text]}'
+```
+```
+{"object":"response","model":"claude-sonnet-5-5","status":"completed","text":["Bratislava."]}
+```
+
+b) Function calling, kterým Codex spouští příkazy a edituje soubory:
+```bash
+curl -s $GW/v1/responses -H "Authorization: Bearer $VK" -H "Content-Type: application/json" -d '{
+  "model":"claude-sonnet-5-5","max_output_tokens":1000,
+  "tools":[{"type":"function","name":"shell","description":"Run a shell command",
+            "parameters":{"type":"object","properties":{"command":{"type":"array","items":{"type":"string"}}},"required":["command"]}}],
+  "input":"Vypiš soubory v aktuálním adresáři pomocí nástroje shell."}' \
+  | jq -c '{status, calls: [.output[] | select(.type=="function_call") | {name, arguments}]}'
+```
+```
+{"status":"completed","calls":[{"name":"shell","arguments":"{\"command\": [\"ls\", \"-la\"]}"}]}
+```
+
+c) Streaming (Responses API posílá typované události):
+```bash
+curl -s -N $GW/v1/responses -H "Authorization: Bearer $VK" -H "Content-Type: application/json" \
+  -d '{"model":"claude-haiku-5-5","stream":true,"max_output_tokens":300,"input":"Řekni ahoj."}' \
+  | sed -n 's/^data: //p' | grep -v '^\[DONE\]' | jq -r .type | uniq -c
+```
+```
+   1 response.created
+   1 response.in_progress
+   1 response.output_item.added
+   1 response.content_part.added
+   7 response.output_text.delta
+   1 response.output_text.done
+   1 response.content_part.done
+   1 response.output_item.done
+   1 response.completed
+```
+
+**Konfigurace na stanici:** `~/.codex/config.toml`
+```toml
+model = "claude-sonnet-5-5"
+model_provider = "litellm"
+
+[model_providers.litellm]
+name = "LiteLLM gateway"
+base_url = "https://192.0.2.10:8443/v1"     # S /v1
+env_key = "LITELLM_API_KEY"                # název proměnné s klíčem, ne klíč samotný
+wire_api = "responses"
+stream_idle_timeout_ms = 7200000           # dlouhé kroky agenta
+stream_max_retries = 5
+request_max_retries = 4
+```
+```bash
+export LITELLM_API_KEY=<VIRTUAL_KEY>
+export CODEX_CA_CERTIFICATE=$HOME/caddy-root.crt   # interní CA (záložně čte i SSL_CERT_FILE)
+codex
+codex --model claude-haiku-5-5                     # jiný model jen pro tento běh
+```
+Volitelně si Codex (0.159+) umí načíst seznam modelů z gateway: v sekci `[model_providers.litellm]` doplňte `model_catalog_url = "https://192.0.2.10:8443/v1/models"` a do konfigurace přidejte `[features]` s `api_key_model_discovery = true`.
+
+> Codex je laděný na modely OpenAI. S Claude modely funguje, ale chování nástrojů a promptů se může lišit od nativního Claude Code. Na školení je to dobrá ukázka, že gateway odděluje volbu **klienta** od volby **modelu**.
+
+### 8.5 Claude Desktop
+
+**Jak to funguje:** Claude Desktop umí místo účtu claude.ai používat vlastní inference přes gateway (*third-party inference*). Konfiguraci čte z vlastního nastavení aplikace, **ne** z `ANTHROPIC_BASE_URL` ani `settings.json`. Dokumentace: [Claude Desktop – LLM gateway](https://claude.com/docs/third-party/claude-desktop/gateway).
+
+**Požadavky na gateway** (všechny jsme ověřili výše):
+- `POST /v1/messages` se streamingem a tool use (kap. 8.3 a, 7.6 c),
+- **HTTPS** s kompletním řetězem certifikátů (kap. 7.6 b), HTTP projde jen na `127.0.0.1`,
+- zachování prompt cachingu včetně objektu `cache_creation` v `usage` (kap. 4.6 c, 8.3 b),
+- volitelně `GET /v1/models`. LiteLLM při hlavičce `anthropic-version` vrací Anthropic formát, ze kterého si Desktop sestaví nabídku modelů (zobrazí jen modely s rozpoznatelným Claude ID):
+  ```bash
+  curl -s $GW/v1/models -H "x-api-key: $VK" -H "anthropic-version: 2023-06-01" | jq -c '.data[0]'
+  ```
+  ```
+  {"type":"model","id":"claude-haiku-5-5","display_name":"claude-haiku-5-5","created_at":"…","max_input_tokens":1000000,"max_tokens":128000}
+  ```
+
+**Konfigurace v aplikaci (jeden počítač):**
+1. Root CA Caddy importovat do systémového úložiště (kap. 7.5). Claude Desktop ho potřebuje i pro Claude Code sessions, které spouští uvnitř.
+2. *Help → Troubleshooting → Enable Developer Mode* (aplikace se restartuje a přibude menu *Developer*).
+3. *Developer → Configure Third-Party Inference…* → sekce **Connection**:
+   - **Inference provider:** Gateway
+   - **Gateway base URL:** `https://192.0.2.10:8443` (bez `/v1`)
+   - **Credential kind:** API key, **Gateway API key:** virtual key
+   - **Auth scheme:** bearer (výchozí; LiteLLM přijme i `x-api-key`)
+4. Uložit a restartovat. V nabídce modelů by měly být `claude-sonnet-5-5` a `claude-haiku-5-5`.
+5. Ověření na gateway: requesty se objeví ve spend logu pod aliasem klíče (kap. 5.5).
+
+**Pro firmu:** Tlačítkem *Export* v témže okně vznikne `.mobileconfig` (macOS) nebo `.reg` (Windows) s klíči `inferenceProvider: gateway`, `inferenceGatewayBaseUrl`, `inferenceGatewayApiKey`, `inferenceGatewayAuthScheme`. Ty se distribuují přes MDM nebo GPO a formulář v aplikaci se pak stane jen pro čtení. Místo sdíleného statického klíče lze použít SSO přes Entra ID nebo Okta (`inferenceGatewayOidc`), takže každý uživatel má vlastní identitu.
+
+> **Pozor:** V režimu gateway Claude Desktop **nepoužívá účet claude.ai** (chat, projekty a další funkce účtu nejsou k dispozici). Návrat do normálního režimu: v *Configure Third-Party Inference* přepnout poskytovatele zpět, případně vypnout Developer Mode.
+
+### 8.6 Ověření na straně gateway
+
+Útrata klienta se připíše jeho klíči i uživateli:
+```bash
+curl -s "http://localhost:4000/user/info?user_id=jan.novak" -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+  | jq -c '{user_spend: .user_info.spend, keys: [.keys[] | {key_alias, spend}]}'
+```
+```
+{"user_spend":0.005186,"keys":[{"key_alias":"jan.novak-laptop","spend":0.000006},{"key_alias":"jan.novak-mac-test","spend":0.00518}]}
+```
+
+### Troubleshooting
+
+| Příznak | Příčina | Řešení |
+|---|---|---|
+| `404 Not Found` na `/v1/v1/messages` | base URL s `/v1` u klienta, který si ho přidává sám (Claude Code, Desktop, Anthropic SDK) | base URL bez `/v1` |
+| `404` na `/chat/completions` nebo `/responses` | base URL bez `/v1` u OpenAI SDK nebo Codexu | base URL s `/v1` |
+| `401` u Claude Code | klíč v jiné proměnné, než gateway čte | LiteLLM čte obě hlavičky. Zkontrolujte, že `/status` ukazuje `ANTHROPIC_AUTH_TOKEN` a že nevyhrává uložené přihlášení claude.ai (`/logout`) |
+| `team_model_access_denied` / `key not allowed to access model` | klient chce model, který tým nebo klíč nemá (např. výchozí Opus v Claude Code) | `ANTHROPIC_DEFAULT_*_MODEL`, nebo doplnit model do týmu |
+| `SSL certificate verification failed`, `UNABLE_TO_VERIFY_LEAF_SIGNATURE`, `self-signed certificate in chain` | klient nedůvěřuje interní CA | Claude Code: `NODE_EXTRA_CA_CERTS`; Codex: `CODEX_CA_CERTIFICATE`; Python: `SSL_CERT_FILE`; Claude Desktop: systémové úložiště |
+| Claude Desktop: `Gateway was unreachable` | špatná URL, HTTP místo HTTPS nebo nedostupná síť | `curl $GW/health/liveliness` ze stejného počítače |
+| Claude Desktop nenabízí žádné modely | `/v1/models` vrací ID, která Desktop nepozná jako Claude | modely pojmenovat skutečnými Claude ID (kap. 4.2), nebo je vyjmenovat v `inferenceModels` |
+| `400 Content blocked: …` uprostřed práce agenta | guardrail `secrets-block` našel v kontextu např. API klíč ze souboru `.env` | záměr. Agentovi neukazujte soubory s tajemstvími (permissions/ignore), případně upravte pravidlo |

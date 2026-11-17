@@ -53,9 +53,7 @@ Každý krok v návodu: co a proč, příkaz, očekávaný výstup, ověření, 
 - *(Cursor vyřazen – volá gateway ze svých cloudových serverů, lab není dostupný z internetu)*
 - **Lab:** každý účastník dostane vlastní virtual key a připojí klienty; útrata per klíč v LiteLLM
 
-## Modul G: Observabilita pro admina (volitelně)
-- logy requestů, spend logs, ukládání promptů zap/vyp (GDPR)
-- health endpointy
+*(Modul G – observabilita – ze školení vyřazen.)*
 
 ## Ověřené předpoklady (listopad 2026)
 - LiteLLM v1.106.6 obsahuje guardrail hooky `promptguard` i `litellm_content_filter` (ověřeno v kontejneru)
