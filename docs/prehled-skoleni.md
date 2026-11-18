@@ -125,7 +125,7 @@ Lab nemá DNS pro `lab.example.com`, všechno jede přes IP. Certifikát Caddy s
 Aby se ~9 GB image nestahovalo na místě přes sdílenou linku, lektor VM připraví předem. Podrobně: [`priprava-serveru.md`](priprava-serveru.md).
 
 ```bash
-git clone <REPO_URL> ~/ai-gateway-training   # v domovském adresáři účtu účastníka
+git clone https://github.com/Davids-on/ai-gateway-training.git ~/ai-gateway-training   # v domovském adresáři účtu účastníka
 cd ~/ai-gateway-training/deploy
 sudo ./prepare.sh                                  # interaktivně, ne přes ssh bez -t
 ```
@@ -211,7 +211,7 @@ Klienty doporučuji nainstalovat předem (instalace přes firemní proxy nebo be
 
 **Den předem**
 - [ ] `prepare.sh` doběhl na všech VM bez `[ERROR]`, kontrola z kap. 3.3; na klonech ze šablony spuštěný na každém klonu
-- [ ] `<REPO_URL>` je veřejně (nebo účastníkům) dostupná a repozitář je na VM v `~/ai-gateway-training`
+- [ ] repozitář https://github.com/Davids-on/ai-gateway-training je dostupný ze všech VM a je na VM v `~/ai-gateway-training`
 - [ ] na jedné VM kompletní zkušební průchod (část 1 kap. 6.5 → část 2 modul G), včetně fallbacku, 429 a guardrailů
 - [ ] model server: zátěžový test (`model-server.md`, kap. 5.4), výsledek zapsat do kap. 7
 - [ ] těsně před modulem G: zahřát model (`model-server.md`, kap. 5.2)
@@ -231,6 +231,5 @@ Klienty doporučuji nainstalovat předem (instalace přes firemní proxy nebo be
 - **Časový plán** v kap. 2 je odhad, změřit při zkušebním průchodu.
 - **Výkon model serveru** na 8 vCPU / 16 GB není změřený (referenční lab má 2 vCPU: ~4,5 tokenu/s). Změřit zátěžovým testem a podle výsledku upravit `OLLAMA_NUM_PARALLEL` nebo model.
 - **Firewall model serveru** (`DOCKER-USER`, `setup-model-server.sh --allow-cidr`) ověřen při zkušebním průchodu 17. 11. 2026: povolená síť projde, ostatní zdroje se zahodí, pravidla přežijí restart. Ručně zadaná pravidla z `model-server.md` kap. 4.6 (bez skriptu) restart nepřežijí.
-- **URL repozitáře:** v návodech je placeholder `<REPO_URL>`, po publikaci na GitHubu ho doplnit (`navod.md` kap. 6.1, `priprava-serveru.md`, tento přehled).
 - **Konfigurační fáze:** zdrojem pravdy je `deploy/stages/5-local-model/`, fáze 1–4 se z ní generují (`python3 deploy/stages/build-stages.py`). Po každé změně konfigurace skript spustit a změnu projít v `git diff`.
 - **Distribuce klíčů Anthropic/PromptGuard** na VM účastníků: rozhodnout model (sdílený vs. per VM) podle rozpočtu a počtu účastníků.

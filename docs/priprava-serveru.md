@@ -41,7 +41,7 @@ Skript počítá i s **minimalizovanou instalací** Ubuntu Serveru (*Ubuntu Serv
 Na VM účastníka naklonujte repozitář do domovského adresáře účtu, pod kterým bude účastník pracovat, a jako tento uživatel se sudo spusťte skript **v interaktivním terminálu** (kvůli skrytému zadání klíčů; přes SSH tedy `ssh -t`):
 
 ```bash
-git clone <REPO_URL> ~/ai-gateway-training     # na minimalizované instalaci: sudo apt-get install -y git
+git clone https://github.com/Davids-on/ai-gateway-training.git ~/ai-gateway-training     # na minimalizované instalaci: sudo apt-get install -y git
 cd ~/ai-gateway-training/deploy
 sudo ./prepare.sh             # nebo: sudo ./prepare.sh --skip-upgrade
 ```

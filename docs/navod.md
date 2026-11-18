@@ -4,7 +4,7 @@
 
 > **Konvence:**
 > - Příkazy se spouštějí na serveru jako běžný uživatel se sudo.
-> - Hodnoty ve tvaru `<NAME>` jsou placeholdery, nahraďte je svými hodnotami. Názvy odpovídají proměnným v `.env`: `<SERVER_IP>` je IP adresa vaší VM (proměnná `SERVER_IP`, v referenčním labu `192.0.2.10`), `<MODEL_SERVER_IP>` adresa sdíleného model serveru, `<REPO_URL>` adresa repozitáře školení, `<USER>` váš uživatel.
+> - Hodnoty ve tvaru `<NAME>` jsou placeholdery, nahraďte je svými hodnotami. Názvy odpovídají proměnným v `.env`: `<SERVER_IP>` je IP adresa vaší VM (proměnná `SERVER_IP`, v referenčním labu `192.0.2.10`), `<MODEL_SERVER_IP>` adresa sdíleného model serveru, `<USER>` váš uživatel.
 > - Skutečná tajemství do návodu ani do gitu nikdy nepatří.
 > - Když změníte `.env` (např. skriptem `set-env.sh`) v shellu, do kterého jste dřív načetli proměnné (`set -a; . ./.env; set +a`), načtěte je znovu. Proměnná v shellu má u `docker compose` přednost před `.env`.
 > - Repozitář školení je na serveru naklonovaný v `~/ai-gateway-training` (kap. 6.1).
@@ -593,7 +593,7 @@ Dokumentace: [Docker quick start](https://docs.litellm.ai/docs/proxy/docker_quic
 Konfigurační soubory jsou v repozitáři školení. Stáhneme ho do domovského adresáře a do `/opt/ai-stack` zkopírujeme konfiguraci **fáze 1** (`deploy/stages/1-base`) a dva pomocné skripty:
 
 ```bash
-git clone <REPO_URL> ~/ai-gateway-training
+git clone https://github.com/Davids-on/ai-gateway-training.git ~/ai-gateway-training
 sudo install -d -o "$USER" -g "$USER" -m 750 /opt/ai-stack
 cd /opt/ai-stack
 cp ~/ai-gateway-training/deploy/stages/1-base/{docker-compose.yml,config.yaml} .
