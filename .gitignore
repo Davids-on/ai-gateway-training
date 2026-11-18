@@ -3,3 +3,6 @@
 !.env.example
 .claude/settings.local.json
 .DS_Store
+CLAUDE.local.md
+private/
+*.pptx

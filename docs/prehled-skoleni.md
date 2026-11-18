@@ -66,7 +66,7 @@ Ze školení vyřazeno: RAG / Knowledge, Presidio, Cursor (volá gateway ze své
 
 **Konfigurace po fázích:** Moduly A, E, F0 a G mění konfiguraci serveru. Každý přepne `/opt/ai-stack` na další fázi z [`deploy/stages/`](../deploy/stages/) skriptem `./use-stage.sh <stage>` (ukáže `diff`, zazálohuje, zkopíruje). Ostatní moduly konfiguraci nemění.
 
-> Písmena modulů části 2 odpovídají pořadí ve výuce (A modely → B Open WebUI → C uživatelé). Starší záznamy v `command-log.md` používají původní značení (A Open WebUI, B uživatelé, C modely).
+> Písmena modulů části 2 odpovídají pořadí ve výuce (A modely → B Open WebUI → C uživatelé).
 
 ### Doporučené pořadí a orientační čas
 

@@ -4,7 +4,7 @@ Návod pro lektora: jak připravit **samostatnou VM s lokálním jazykovým mode
 
 > **Referenční lab vs. školení:** V referenčním labu běží model server na stejné VM jako AI stack (`192.0.2.10`), ale jako **samostatný compose projekt** v `/opt/local-llm`, s vlastní sítí i volume a s voláním přes IP a publikovaný port, tedy stejně jako kdyby šlo o jinou VM. Ve školení je to **dedikovaná VM**. Postup je stejný, jen se liší IP a velikost modelu.
 
-Konfigurační soubory: [`deploy/local-llm/`](../deploy/local-llm/). Příkazy referenčního labu: [`command-log.md`](command-log.md).
+Konfigurační soubory: [`deploy/local-llm/`](../deploy/local-llm/).
 
 ---
 

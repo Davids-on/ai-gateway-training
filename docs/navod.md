@@ -28,7 +28,7 @@
 10. [Další kroky](#10-další-kroky)
 11. [Odkazy](#11-odkazy)
 
-Konfigurační soubory jsou v repozitáři v adresáři [`deploy/stages/`](../deploy/stages/), rozdělené do **fází** podle postupu školení: část 1 používá fázi `1-base`, každý další modul části 2 přidá další fázi. Komentáře v souborech jsou anglicky, ukázky v návodu mají pro přehlednost komentáře česky. Všechny příkazy použité při přípravě referenčního labu jsou v [`command-log.md`](command-log.md).
+Konfigurační soubory jsou v repozitáři v adresáři [`deploy/stages/`](../deploy/stages/), rozdělené do **fází** podle postupu školení: část 1 používá fázi `1-base`, každý další modul části 2 přidá další fázi. Komentáře v souborech jsou anglicky, ukázky v návodu mají pro přehlednost komentáře česky.
 
 > [!NOTE]
 > **VM připravená lektorem:** Kroky kapitol 4–6 (systém, Docker, konfigurace, tajemství, stažení ~9 GB image) umí předem provést skript [`deploy/prepare.sh`](../deploy/prepare.sh) ([příprava serveru pro lektora](priprava-serveru.md)). Pokud vám lektor VM takto připravil, kapitoly 4 a 5 jen projděte a ověřte a v kapitole 6 sledujte rámečky **„VM připravená skriptem“**.

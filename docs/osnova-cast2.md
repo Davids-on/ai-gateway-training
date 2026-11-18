@@ -3,7 +3,7 @@
 Navazuje na `docs/navod.md` (instalace LiteLLM + Open WebUI). Výsledný návod: `docs/navod-cast2.md`.
 Stav labu na začátku: LiteLLM v1.106.6, Open WebUI v0.12.5, PostgreSQL 16.15, jeden model přes OpenRouter (konfigurace fáze `1-base`).
 Konfigurace se mění po fázích (`deploy/stages/`): A → `2-models`, E → `3-guardrails`, F0 → `4-https`, G → `5-local-model`.
-Písmena modulů odpovídají pořadí výuky; starší záznamy v `command-log.md` mají původní značení (A Open WebUI, B uživatelé, C modely).
+Písmena modulů odpovídají pořadí výuky.
 
 Každý krok v návodu: co a proč, příkaz, očekávaný výstup, ověření, typické problémy.
 

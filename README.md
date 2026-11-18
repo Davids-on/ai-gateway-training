@@ -18,7 +18,6 @@ Návody mají **jádro** (krok za krokem, stačí k dokončení labu) a sbalené
 | [Přehled školení](docs/prehled-skoleni.md) | osnova, časový plán, příprava VM, sítě a stanic, klíče, checklist |
 | [Příprava VM účastníků](docs/priprava-serveru.md) | skript `deploy/prepare.sh` |
 | [Model server](docs/model-server.md) | sdílená VM s lokálním modelem (Ollama), skript `deploy/local-llm/setup-model-server.sh` |
-| [Command log](docs/command-log.md) | příkazy z přípravy referenčního labu |
 
 ## Struktura repozitáře
 

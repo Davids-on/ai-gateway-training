@@ -28,7 +28,7 @@
 9. [Modul G: Lokální model přes AI gateway](#9-modul-g-lokální-model-přes-ai-gateway)
 10. [Příloha A: Lokální AI model – zprovoznění a HW požadavky](#10-příloha-a-lokální-ai-model--zprovoznění-a-hw-požadavky)
 
-Konfigurační soubory jsou v [`deploy/stages/`](../deploy/stages/), příkazy referenčního labu v [`command-log.md`](command-log.md).
+Konfigurační soubory jsou v [`deploy/stages/`](../deploy/stages/).
 
 ---
 
