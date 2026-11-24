@@ -89,6 +89,9 @@ services:
       WEBUI_URL: ${WEBUI_URL:-http://localhost:3000}
       # New users (after the first admin) wait for admin approval.
       DEFAULT_USER_ROLE: pending
+      # Part 2, section 5.6: send the logged-in user to LiteLLM in
+      # X-OpenWebUI-User-* headers (end_user in the LiteLLM spend logs).
+      ENABLE_FORWARD_USER_INFO_HEADERS: "True"
     volumes:
       - open-webui-data:/app/backend/data
     ports:

@@ -847,7 +847,64 @@ curl -s "$U/user/info?user_id=jan.novak" -H "$M" | jq -c '{spend: .user_info.spe
       group by 1,2 order by 1,2'
   ```
 
-### 5.6 Úklid demo klíčů
+### 5.6 Uživatelé Open WebUI ve spend logu LiteLLM
+
+**Co a proč:** Open WebUI volá LiteLLM jediným virtual key (`OPENWEBUI_LITELLM_KEY`). Pro LiteLLM jsou proto všechny chaty jeden klient a ve spend logu nepoznáte, kdo kolik utratil. Open WebUI ale umí přihlášeného uživatele posílat v HTTP hlavičkách a LiteLLM jednu z nich umí uložit jako **end user** (v Admin UI se mu říká *customer*).
+
+Obě nastavení už obsahuje fáze `2-models` i všechny další ([`deploy/stages/2-models/`](../deploy/stages/2-models/)). Pokud jste v modulu A server přepnuli přes `./use-stage.sh 2-models`, jsou kroky a) až c) hotové. Projděte je jako vysvětlení a rovnou přejděte k ověření d).
+
+**a) Open WebUI: posílání hlaviček.** Do `environment` služby `open-webui` v `docker-compose.yml` přidejte:
+```yaml
+      # Send the logged-in user to LiteLLM in X-OpenWebUI-User-* headers.
+      ENABLE_FORWARD_USER_INFO_HEADERS: "True"
+```
+Open WebUI pak ke každému requestu přidá hlavičky `X-OpenWebUI-User-Email`, `X-OpenWebUI-User-Name`, `X-OpenWebUI-User-Id`, `X-OpenWebUI-User-Role` a `X-OpenWebUI-Chat-Id`.
+
+**b) LiteLLM: hlavička jako identita uživatele.** Do `general_settings` v `config.yaml` přidejte:
+```yaml
+  # Store the Open WebUI user as end_user in the spend logs.
+  user_header_name: X-OpenWebUI-User-Email
+```
+E-mail je pro reporting čitelnější než interní ID uživatele. Pokud nechcete mít e-maily ve spend logu, použijte `X-OpenWebUI-User-Id`.
+
+**c) Nasazení:**
+```bash
+cd /opt/ai-stack
+docker compose up -d open-webui      # změna proměnné prostředí → kontejner se vytvoří znovu
+docker compose restart litellm       # změna config.yaml → stačí restart
+```
+U Open WebUI nestačí `restart`, protože proměnné prostředí se do kontejneru zapíšou jen při jeho vytvoření. Kontejner LiteLLM se nebuilduje (používá hotový image), `config.yaml` je do něj jen namountovaný.
+
+**d) Ověření:** pošlete v Open WebUI zprávu pod dvěma různými uživateli a podívejte se do spend logu:
+```bash
+docker compose exec -T postgres psql -U litellm <<'EOF'
+select to_char("startTime",'HH24:MI:SS') t, end_user, model_group, round(spend::numeric,6) spend
+from "LiteLLM_SpendLogs" order by "startTime" desc limit 4;
+EOF
+```
+Očekávaný výstup (ilustrativní):
+```
+    t     |     end_user     |   model_group    |  spend
+----------+------------------+------------------+----------
+ 11:02:41 | petr@example.com | claude-haiku-5-5 | 0.000021
+ 11:02:10 | jana@example.com | claude-haiku-5-5 | 0.000018
+```
+V Admin UI: *Logs* → sloupec *End User* (dá se podle něj filtrovat) a útrata po uživatelích v *Usage* / *Customers*. V `docker compose logs litellm` uživatele neuvidíte, jsou tam jen přístupové řádky Uvicornu.
+
+> **Bezpečnost a GDPR:** Hlavičku `X-OpenWebUI-User-Email` může poslat kdokoli, kdo má virtual key. Identitě ve spend logu proto věřte jen u klíče, který má výhradně Open WebUI (a ten nikomu nedávejte). E-maily ve spend logu jsou osobní údaj, takže je zahrňte do posouzení retence logů.
+
+<details>
+<summary>🔧 Řešení problémů</summary>
+
+| Příznak | Příčina | Řešení |
+|---|---|---|
+| `end_user` je prázdný | Open WebUI hlavičky neposílá: po změně compose jen `restart` | `docker compose up -d open-webui`, ověřit `docker compose exec open-webui env \| grep FORWARD` |
+| `end_user` je prázdný, proměnná v Open WebUI je nastavená | LiteLLM nemá `user_header_name` nebo nebyl restartován | zkontrolovat `general_settings` v `config.yaml`, `docker compose restart litellm` |
+| `end_user` je jen u nových requestů | hodnota se ukládá při zápisu requestu | starší záznamy se zpětně nedoplní |
+
+</details>
+
+### 5.7 Úklid demo klíčů
 
 ```bash
 curl -s $U/key/delete -H "$M" -H "Content-Type: application/json" \

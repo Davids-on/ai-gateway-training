@@ -75,6 +75,8 @@ for name, (desc, n) in stages.items():
         y = cut(y, "# --- Guardrails (part 2, module E) ---", "general_settings:")
     if n < 2:
         c = c.replace(new_keys, "")
+        c = cut(c, "      # Part 2, section 5.6: send the logged-in user", "    volumes:\n      - open-webui-data")
+        y = cut(y, "  # Part 2, section 5.6: store the Open WebUI user", "  # X-Forwarded-For")
         y = cut(y, "  # --- Anthropic (direct provider, part 2 of the training) ---", "litellm_settings:")
         y = cut(y, "  # Silently drop request parameters", "general_settings:")
         y = y.replace("  request_timeout: 600\n", "  request_timeout: 600\n\n")

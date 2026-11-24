@@ -1536,7 +1536,7 @@ Mimo rozsah školení zůstávají tato témata:
 1. **SSO**
    - Open WebUI: OIDC (Entra ID, Keycloak) nebo LDAP proti AD `lab.example.com`, mapování skupin na role
    - LiteLLM Admin UI: SSO pro administrátory
-   - per-user identita až do LiteLLM (`ENABLE_FORWARD_USER_INFO_HEADERS`) a útrata po uživatelích
+   - (uživatel Open WebUI ve spend logu LiteLLM je popsán v [části 2, kap. 5.6](navod-cast2.md#56-uživatelé-open-webui-ve-spend-logu-litellm))
 2. **Logování do SIEM**
    - LiteLLM callbacks (OpenTelemetry, Datadog, Langfuse, S3…) a JSON logy (`json_logs: true`)
    - logy kontejnerů přes Docker log driver (syslog/gelf/fluentd) nebo agenta (Fluent Bit, Elastic Agent, Wazuh)
