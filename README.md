@@ -9,6 +9,8 @@
 | [Část 1: Instalace](docs/navod.md) | Docker, LiteLLM + PostgreSQL, Open WebUI, provoz, záloha, bezpečnost |
 | [Část 2: Používání a správa](docs/navod-cast2.md) | modely a fallbacky, Open WebUI pro uživatele, skupiny, týmy a budgety, guardraily, HTTPS, klienti, lokální model |
 
+**Jen si to chcete rychle nainstalovat a hrát si?** [Rychlá instalace](docs/rychla-instalace.md): jeden skript (`deploy/install-all.sh`) postaví celý stack v konečném stavu školení, ručně jen získáte API klíče a naimportujete certifikát.
+
 Návody mají **jádro** (krok za krokem, stačí k dokončení labu) a sbalené bloky **📘 Samostudium** (pozadí, alternativy, produkční poznámky) a **🔧 Řešení problémů**.
 
 ## Pro lektora
@@ -25,6 +27,7 @@ Návody mají **jádro** (krok za krokem, stačí k dokončení labu) a sbalené
 deploy/
   stages/          konfigurace serveru po fázích školení (1-base … 5-local-model)
   prepare.sh       příprava VM účastníka (Docker, konfigurace, tajemství, image)
+  install-all.sh   kompletní instalace konečného stavu jedním skriptem (prepare.sh + spuštění a nastavení)
   set-env.sh       bezpečný zápis hodnoty do .env
   use-stage.sh     přepnutí serveru na další fázi konfigurace
   .env.example     vzor .env (skutečný .env nikdy necommitovat)
